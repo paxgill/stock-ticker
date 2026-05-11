@@ -93,7 +93,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: '▣ TERMINAL',
+    title: '▣ PG Stock Analysis',
     show: false,
   });
 
@@ -130,7 +130,7 @@ function createTray() {
   if (process.platform === 'darwin') icon = icon.resize({ width: 16, height: 16 });
 
   tray = new Tray(icon);
-  tray.setToolTip('▣ TERMINAL — Stock Dashboard');
+  tray.setToolTip('▣ PG Stock Analysis — Stock Dashboard');
   updateTrayMenu();
 
   tray.on('click', () => toggleWindow());
@@ -156,7 +156,7 @@ function updateTrayMenu() {
   const onTopLabel = alwaysOnTop ? '✓ Always on Top' : 'Always on Top';
 
   const template = [
-    { label: '▣ TERMINAL', enabled: false },
+    { label: '▣ PG Stock Analysis', enabled: false },
     { type: 'separator' },
     ...(topMovers.length > 0 ? [
       { label: 'TOP MOVERS', enabled: false },
@@ -174,7 +174,7 @@ function updateTrayMenu() {
     { type: 'separator' },
     { label: 'Open Dashboard in Browser', click: () => shell.openExternal(FLASK_URL) },
     { type: 'separator' },
-    { label: 'Quit TERMINAL', click: () => { app.isQuitting = true; app.quit(); } },
+    { label: 'Quit PG Stock Analysis', click: () => { app.isQuitting = true; app.quit(); } },
   ];
 
   tray.setContextMenu(Menu.buildFromTemplate(template));

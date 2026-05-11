@@ -1095,7 +1095,7 @@ async function requestNotifications() {
   document.getElementById('notif-btn').classList.toggle('active', S.notifGranted);
   if (S.notifGranted) {
     showToast('Desktop notifications enabled.', 'success');
-    new Notification('▣ TERMINAL', { body: 'Price alerts are now active.' });
+    new Notification('▣ PG Stock Analysis', { body: 'Price alerts are now active.' });
   } else {
     showToast('Notification permission denied.', 'error');
   }
@@ -1199,7 +1199,7 @@ function generateScriptableScript() {
   const port = window.location.port || '5000';
   const baseUrl = `http://${host}:${port}`;
 
-  return `// ▣ TERMINAL — Scriptable iOS Widget
+  return `// ▣ PG Stock Analysis — Scriptable iOS Widget
 // Paste into Scriptable app, name it "StockTicker"
 // Update BASE_URL to your server's local IP
 
@@ -1243,7 +1243,7 @@ try {
   // Header
   const header = widget.addStack();
   header.layoutHorizontally();
-  const logo = header.addText("▣ TERMINAL");
+  const logo = header.addText("▣ PG Stock Analysis");
   logo.textColor = new Color("#00d4aa");
   logo.font = Font.boldMonospacedSystemFont(10);
   header.addSpacer();
