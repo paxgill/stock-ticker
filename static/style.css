@@ -421,6 +421,102 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
 .toast.error { border-color: var(--red); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+/* ─── Market Summary Card ──────────────────────────────────────── */
+.market-summary-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin: 14px 20px 0;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent2);
+  border-radius: 6px;
+  padding: 14px 18px;
+  animation: fadeIn .3s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+.market-summary-indices {
+  display: flex;
+  gap: 20px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.ms-index {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 62px;
+}
+.ms-index-name {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--text3);
+  margin-bottom: 3px;
+}
+.ms-index-pct {
+  font-size: 15px;
+  font-weight: 700;
+}
+.ms-index-price {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 1px;
+}
+.ms-divider {
+  width: 1px;
+  background: var(--border);
+  align-self: stretch;
+  flex-shrink: 0;
+}
+.ms-text-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.ms-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text3);
+  margin-bottom: 5px;
+}
+.ms-paragraph {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.65;
+}
+.ms-timestamp {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 5px;
+}
+.market-summary-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 20px 0;
+  padding: 12px 18px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text3);
+  letter-spacing: 0.06em;
+}
+
+/* ─── Trade Description ─────────────────────────────────────────── */
+.signal-description {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.7;
+}
+.signal-description::before {
+  content: '▸ ';
+  color: var(--text3);
+}
+
 /* ─── Print (PDF export) ───────────────────────────────────────── */
 @media print {
   .dash-header, .dash-toolbar, .tab-nav, .tab-content:not(#tab-signals), .disclaimer { display: none !important; }

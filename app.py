@@ -11,6 +11,7 @@ import pandas as pd
 
 from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference
 from analysis import analyze_ticker, compute_rsi, DEFAULT_PROFILE
+from narratives import fetch_index_data, generate_market_summary, generate_trade_description
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -272,6 +273,18 @@ def activate_profile(pid):
     return jsonify(profile.to_dict())
 
 
+# ─── Market Summary ───────────────────────────────────────────────────────────
+@app.route("/api/market-summary")
+def market_summary():
+    indices = fetch_index_data()
+    summary = generate_market_summary(indices)
+    return jsonify({
+        "summary": summary,
+        "indices": indices,
+        "generated_at": datetime.now().isoformat(),
+    })
+
+
 # ─── Suggestions ──────────────────────────────────────────────────────────────
 @app.route("/api/suggestions")
 def get_suggestions():
@@ -288,6 +301,7 @@ def get_suggestions():
         if analysis:
             analysis["name"] = item.name
             analysis["tier"] = item.tier
+            analysis["description"] = generate_trade_description(analysis)
             results.append(analysis)
 
     # Sort: BUY first (desc confidence), then HOLD, then SELL

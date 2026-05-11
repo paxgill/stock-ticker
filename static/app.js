@@ -115,6 +115,7 @@ function showDashboard() {
   applyPreferences();
   updateMarketStatus();
   fetchAllQuotes();
+  fetchMarketSummary();
   startAutoRefresh();
 }
 
@@ -285,6 +286,77 @@ async function launchDashboard() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// MARKET SUMMARY CARD
+// ════════════════════════════════════════════════════════════════
+let marketSummaryCache = null;
+let marketSummaryFetchedAt = 0;
+const SUMMARY_TTL_MS = 5 * 60 * 1000; // re-fetch at most every 5 min
+
+async function fetchMarketSummary() {
+  const wrap = document.getElementById('market-summary-wrap');
+  if (!wrap) return;
+
+  // Show skeleton while loading (only on first load)
+  if (!marketSummaryCache) {
+    wrap.innerHTML = `<div class="market-summary-loading"><div class="loading-spinner" style="width:14px;height:14px;border-width:1px"></div>Fetching market indices...</div>`;
+  }
+
+  const now = Date.now();
+  if (marketSummaryCache && (now - marketSummaryFetchedAt) < SUMMARY_TTL_MS) {
+    renderMarketSummary(marketSummaryCache);
+    return;
+  }
+
+  try {
+    const data = await api.get('/api/market-summary');
+    marketSummaryCache = data;
+    marketSummaryFetchedAt = now;
+    renderMarketSummary(data);
+  } catch (e) {
+    wrap.innerHTML = ''; // fail silently — dashboard still loads
+  }
+}
+
+function renderMarketSummary(data) {
+  const wrap = document.getElementById('market-summary-wrap');
+  if (!wrap) return;
+
+  const indices = data.indices || {};
+  const indexOrder = ['^GSPC', '^IXIC', '^DJI'];
+  const names = { '^GSPC': 'S&P 500', '^IXIC': 'NASDAQ', '^DJI': 'DOW' };
+
+  const indexBlocks = indexOrder
+    .filter(sym => indices[sym])
+    .map(sym => {
+      const idx = indices[sym];
+      const up = idx.pct >= 0;
+      const pctStr = (up ? '+' : '') + idx.pct.toFixed(2) + '%';
+      const priceStr = idx.price >= 10000
+        ? idx.price.toLocaleString('en-US', { maximumFractionDigits: 0 })
+        : idx.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return `
+        <div class="ms-index">
+          <div class="ms-index-name">${names[sym]}</div>
+          <div class="ms-index-pct ${up ? 'up' : 'down'}">${pctStr}</div>
+          <div class="ms-index-price">${priceStr}</div>
+        </div>`;
+    }).join('');
+
+  const time = new Date(data.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  wrap.innerHTML = `
+    <div class="market-summary-card">
+      <div class="market-summary-indices">${indexBlocks}</div>
+      <div class="ms-divider"></div>
+      <div class="ms-text-wrap">
+        <div class="ms-label">DAILY MARKET SUMMARY</div>
+        <div class="ms-paragraph">${data.summary}</div>
+        <div class="ms-timestamp">Generated ${time}</div>
+      </div>
+    </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
 // DASHBOARD — QUOTES
 // ════════════════════════════════════════════════════════════════
 async function fetchAllQuotes() {
@@ -402,6 +474,7 @@ function switchTab(name, btn) {
   document.getElementById(`tab-${name}`).classList.add('active');
   document.getElementById('dash-toolbar').style.display = name === 'dashboard' ? '' : 'none';
 
+  if (name === 'dashboard') fetchMarketSummary();
   if (name === 'signals') renderSignalsTab();
   if (name === 'portfolio') { loadPortfolio().then(renderPortfolio); }
   if (name === 'journal') { loadTrades().then(renderJournal); }
@@ -467,6 +540,7 @@ function renderSignalsContent() {
           <div class="signal-price">$${s.price ? s.price.toFixed(2) : '—'}</div>
         </div>
         <div class="signal-reasons">${reasons}</div>
+        ${s.description ? `<div class="signal-description">${s.description}</div>` : ''}
         <div class="signal-card-footer">
           <div class="tier-info">Risk: ${s.risk_tolerance || '—'}</div>
           <button class="log-trade-btn" onclick="openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
