@@ -1,0 +1,79 @@
+{
+  "name": "terminal-stock-dashboard",
+  "version": "2.0.0",
+  "description": "Bloomberg-inspired stock dashboard with trade suggestions and portfolio tracking",
+  "main": "electron/main.js",
+  "scripts": {
+    "electron": "electron .",
+    "electron:dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "flask": "python app.py"
+  },
+  "build": {
+    "appId": "com.terminal.stockdashboard",
+    "productName": "TERMINAL",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "static/**/*",
+      "app.py",
+      "models.py",
+      "analysis.py",
+      "requirements.txt",
+      "data/"
+    ],
+    "extraResources": [
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "app.py",
+          "models.py",
+          "analysis.py",
+          "requirements.txt"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "icon": "electron/assets/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "icon": "electron/assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "keywords": [
+    "stocks",
+    "finance",
+    "electron",
+    "flask",
+    "dashboard"
+  ],
+  "author": "TERMINAL",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1"
+  }
+}

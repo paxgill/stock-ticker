@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TERMINAL — Stock Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════ ONBOARDING -->
+<div id="onboarding" class="screen active">
+  <div class="ob-container">
+    <div class="ob-header">
+      <div class="ob-logo">▣ TERMINAL</div>
+      <div class="ob-tagline">Bloomberg-grade market data. Zero cost.</div>
+    </div>
+
+    <div class="step-indicator">
+      <div class="step active" data-step="1"><span>01</span> TICKERS</div>
+      <div class="step-line"></div>
+      <div class="step" data-step="2"><span>02</span> ALERTS</div>
+      <div class="step-line"></div>
+      <div class="step" data-step="3"><span>03</span> ANALYSIS</div>
+      <div class="step-line"></div>
+      <div class="step" data-step="4"><span>04</span> REFRESH</div>
+      <div class="step-line"></div>
+      <div class="step" data-step="5"><span>05</span> DISPLAY</div>
+    </div>
+
+    <!-- Step 1: Tickers -->
+    <div class="ob-step active" id="step-1">
+      <h2>Add your watched stocks</h2>
+      <p class="step-desc">Type a ticker and press Enter to validate and add it.</p>
+      <div class="ticker-input-row">
+        <div class="input-wrap">
+          <span class="input-prefix">$</span>
+          <input type="text" id="ticker-input" placeholder="AAPL, TSLA, MSFT..." autocomplete="off" autocapitalize="characters" spellcheck="false">
+        </div>
+        <button class="btn-primary" onclick="addTicker()">ADD</button>
+      </div>
+      <div id="ticker-status" class="ticker-status"></div>
+      <div id="ticker-chips" class="ticker-chips"></div>
+      <div class="quick-add">
+        <span class="qa-label">QUICK ADD:</span>
+        <button class="qa-btn" onclick="quickAdd('AAPL')">AAPL</button>
+        <button class="qa-btn" onclick="quickAdd('TSLA')">TSLA</button>
+        <button class="qa-btn" onclick="quickAdd('MSFT')">MSFT</button>
+        <button class="qa-btn" onclick="quickAdd('NVDA')">NVDA</button>
+        <button class="qa-btn" onclick="quickAdd('SPY')">SPY</button>
+        <button class="qa-btn" onclick="quickAdd('QQQ')">QQQ</button>
+        <button class="qa-btn" onclick="quickAdd('AMZN')">AMZN</button>
+        <button class="qa-btn" onclick="quickAdd('GOOGL')">GOOGL</button>
+      </div>
+      <div class="ob-nav">
+        <div></div>
+        <button class="btn-primary" onclick="goStep(2)" id="step1-next" disabled>NEXT →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Alerts -->
+    <div class="ob-step" id="step-2">
+      <h2>Set price alerts <span class="optional">(optional)</span></h2>
+      <p class="step-desc">Get a desktop notification when a stock crosses your target.</p>
+      <div id="alert-inputs" class="alert-inputs"></div>
+      <div class="ob-nav">
+        <button class="btn-ghost" onclick="goStep(1)">← BACK</button>
+        <button class="btn-primary" onclick="goStep(3)">NEXT →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Analysis Profile -->
+    <div class="ob-step" id="step-3">
+      <h2>Analysis profile <span class="optional">(optional)</span></h2>
+      <p class="step-desc">Configure the rule-based signal engine. You can tune this later in Settings.</p>
+      <div class="profile-setup">
+        <div class="profile-row">
+          <label>Profile name</label>
+          <input type="text" id="ob-profile-name" value="My Profile" class="profile-name-input">
+        </div>
+        <div class="profile-row">
+          <label>Risk tolerance</label>
+          <div class="radio-row">
+            <label class="radio-pill"><input type="radio" name="ob-risk" value="Conservative"> Conservative</label>
+            <label class="radio-pill"><input type="radio" name="ob-risk" value="Moderate" checked> Moderate</label>
+            <label class="radio-pill"><input type="radio" name="ob-risk" value="Aggressive"> Aggressive</label>
+          </div>
+        </div>
+        <div class="profile-row">
+          <label>Horizon</label>
+          <div class="radio-row">
+            <label class="radio-pill"><input type="radio" name="ob-horizon" value="Short-term"> Short-term</label>
+            <label class="radio-pill"><input type="radio" name="ob-horizon" value="Swing" checked> Swing</label>
+            <label class="radio-pill"><input type="radio" name="ob-horizon" value="Long-term"> Long-term</label>
+          </div>
+        </div>
+        <div class="profile-row">
+          <label>Signal weights <span class="optional">(must add to 100%)</span></label>
+          <div class="sliders">
+            <div class="slider-row">
+              <span class="slider-lbl">MA Crossover</span>
+              <input type="range" min="0" max="100" value="25" id="w-ma" oninput="updateWeight('ma',this.value)">
+              <span class="slider-val" id="w-ma-val">25%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-lbl">Volume Spike</span>
+              <input type="range" min="0" max="100" value="25" id="w-vol" oninput="updateWeight('vol',this.value)">
+              <span class="slider-val" id="w-vol-val">25%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-lbl">RSI Signal</span>
+              <input type="range" min="0" max="100" value="25" id="w-rsi" oninput="updateWeight('rsi',this.value)">
+              <span class="slider-val" id="w-rsi-val">25%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-lbl">Momentum</span>
+              <input type="range" min="0" max="100" value="25" id="w-mom" oninput="updateWeight('mom',this.value)">
+              <span class="slider-val" id="w-mom-val">25%</span>
+            </div>
+          </div>
+        </div>
+        <div class="profile-row three-col">
+          <div class="mini-field">
+            <label>RSI Overbought</label>
+            <input type="number" id="ob-rsi-ob" value="70" min="60" max="90">
+          </div>
+          <div class="mini-field">
+            <label>RSI Oversold</label>
+            <input type="number" id="ob-rsi-os" value="30" min="10" max="40">
+          </div>
+          <div class="mini-field">
+            <label>Max trades/day</label>
+            <input type="number" id="ob-max-trades" value="3" min="1" max="20">
+          </div>
+        </div>
+        <div class="profile-row">
+          <label>Volume spike threshold</label>
+          <div class="inline-field">
+            <input type="number" id="ob-vol-thresh" value="1.5" min="1.1" max="5" step="0.1">
+            <span class="inline-lbl">× 30-day average</span>
+          </div>
+        </div>
+      </div>
+      <div class="ob-nav">
+        <button class="btn-ghost" onclick="goStep(2)">← BACK</button>
+        <button class="btn-primary" onclick="goStep(4)">NEXT →</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Refresh -->
+    <div class="ob-step" id="step-4">
+      <h2>Refresh interval</h2>
+      <p class="step-desc">How often should prices update?</p>
+      <div class="radio-group">
+        <label class="radio-card"><input type="radio" name="interval" value="60" checked>
+          <div class="radio-inner"><div class="radio-title">1 MIN</div><div class="radio-desc">Near real-time</div></div>
+        </label>
+        <label class="radio-card"><input type="radio" name="interval" value="300">
+          <div class="radio-inner"><div class="radio-title">5 MIN</div><div class="radio-desc">Balanced</div></div>
+        </label>
+        <label class="radio-card"><input type="radio" name="interval" value="900">
+          <div class="radio-inner"><div class="radio-title">15 MIN</div><div class="radio-desc">Conservative</div></div>
+        </label>
+      </div>
+      <div class="ob-nav">
+        <button class="btn-ghost" onclick="goStep(3)">← BACK</button>
+        <button class="btn-primary" onclick="goStep(5)">NEXT →</button>
+      </div>
+    </div>
+
+    <!-- Step 5: Display -->
+    <div class="ob-step" id="step-5">
+      <h2>Display density</h2>
+      <p class="step-desc">Choose how the dashboard renders each stock.</p>
+      <div class="density-options">
+        <label class="density-card" onclick="selectDensity('compact')">
+          <input type="radio" name="density" value="compact" checked>
+          <div class="density-preview compact-preview">
+            <div class="dp-row"><span class="dp-sym">AAPL</span><span class="dp-price green">$189.30</span><span class="dp-pct green">+1.2%</span></div>
+            <div class="dp-row"><span class="dp-sym">TSLA</span><span class="dp-price red">$242.10</span><span class="dp-pct red">-0.8%</span></div>
+            <div class="dp-row"><span class="dp-sym">MSFT</span><span class="dp-price green">$415.60</span><span class="dp-pct green">+0.4%</span></div>
+          </div>
+          <div class="density-label">COMPACT</div>
+          <div class="density-subdesc">Widget-style cards</div>
+        </label>
+        <label class="density-card" onclick="selectDensity('expanded')">
+          <input type="radio" name="density" value="expanded">
+          <div class="density-preview expanded-preview">
+            <div class="dp-card">
+              <div class="dp-head"><span class="dp-sym">AAPL</span><span class="dp-price green">$189.30</span></div>
+              <div class="dp-stats"><span>VOL 52.3M</span><span>MA20 $185</span><span>MA50 $180</span></div>
+            </div>
+          </div>
+          <div class="density-label">EXPANDED</div>
+          <div class="density-subdesc">Full metrics table</div>
+        </label>
+      </div>
+      <div class="ob-nav">
+        <button class="btn-ghost" onclick="goStep(4)">← BACK</button>
+        <button class="btn-primary" onclick="launchDashboard()">LAUNCH →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ DASHBOARD -->
+<div id="dashboard" class="screen">
+  <header class="dash-header">
+    <div class="dash-logo">▣ TERMINAL</div>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="dashboard" onclick="switchTab('dashboard',this)">DASHBOARD</button>
+      <button class="tab-btn" data-tab="signals" onclick="switchTab('signals',this)">SIGNALS</button>
+      <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
+      <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
+    </nav>
+    <div class="dash-right">
+      <span id="market-status" class="market-status"></span>
+      <span id="last-updated" class="last-updated">—</span>
+      <button class="btn-icon" onclick="openWidget()">⊞ WIDGET</button>
+      <button class="btn-icon" id="notif-btn" onclick="requestNotifications()">🔔</button>
+      <button class="btn-icon" onclick="openSettings()">⚙</button>
+    </div>
+  </header>
+
+  <!-- Toolbar (dashboard tab only) -->
+  <div class="dash-toolbar" id="dash-toolbar">
+    <div class="ticker-add-inline">
+      <span class="input-prefix">$</span>
+      <input type="text" id="dash-ticker-input" placeholder="Add ticker..." autocapitalize="characters" spellcheck="false" onkeydown="if(event.key==='Enter')dashAddTicker()">
+      <button onclick="dashAddTicker()">+</button>
+    </div>
+    <div class="toolbar-center" id="toolbar-center"></div>
+    <div class="toolbar-right">
+      <span class="refresh-label">AUTO</span>
+      <span id="countdown" class="countdown">—</span>
+      <button class="btn-sm" onclick="fetchAllQuotes()">↺ NOW</button>
+    </div>
+  </div>
+
+  <!-- ─ Tab: Dashboard ──────────────────────────────────────────────── -->
+  <div id="tab-dashboard" class="tab-content active">
+    <div id="dashboard-content" class="dashboard-content">
+      <div class="loading-screen"><div class="loading-spinner"></div><div>Fetching market data...</div></div>
+    </div>
+  </div>
+
+  <!-- ─ Tab: Signals ───────────────────────────────────────────────── -->
+  <div id="tab-signals" class="tab-content">
+    <div class="signals-header">
+      <div class="signals-profile-bar">
+        <span class="signals-label">ACTIVE PROFILE:</span>
+        <span id="signals-profile-name" class="signals-profile-name">None</span>
+        <button class="btn-sm" onclick="openSettings('profiles')">CHANGE</button>
+      </div>
+      <div class="signals-actions">
+        <button class="btn-sm" onclick="fetchSuggestions()">↺ REFRESH</button>
+        <button class="btn-sm" onclick="exportSuggestionsCSV()">⬇ CSV</button>
+        <button class="btn-sm" onclick="printSuggestions()">⎙ PDF</button>
+      </div>
+    </div>
+    <div class="disclaimer">
+      ⚠ DISCLAIMER: These signals are generated by a rule-based algorithm using your configured parameters.
+      This is NOT financial advice. Always do your own research before making investment decisions.
+    </div>
+    <div id="signals-content" class="signals-content">
+      <div class="loading-screen"><div class="loading-spinner"></div><div>Running analysis...</div></div>
+    </div>
+  </div>
+
+  <!-- ─ Tab: Portfolio ─────────────────────────────────────────────── -->
+  <div id="tab-portfolio" class="tab-content">
+    <div id="portfolio-summary" class="portfolio-summary"></div>
+    <div class="portfolio-toolbar">
+      <h3>HOLDINGS</h3>
+      <button class="btn-primary" onclick="openAddPosition()">+ ADD POSITION</button>
+    </div>
+    <div id="portfolio-content" class="portfolio-content">
+      <div class="loading-screen"><div class="loading-spinner"></div><div>Loading portfolio...</div></div>
+    </div>
+  </div>
+
+  <!-- ─ Tab: Journal ───────────────────────────────────────────────── -->
+  <div id="tab-journal" class="tab-content">
+    <div class="journal-toolbar">
+      <div class="journal-filters">
+        <input type="text" id="journal-sym-filter" placeholder="Symbol..." style="width:90px" oninput="filterJournal()">
+        <select id="journal-action-filter" onchange="filterJournal()">
+          <option value="">All actions</option>
+          <option>Buy</option><option>Sell</option><option>Short</option><option>Cover</option>
+        </select>
+        <input type="date" id="journal-start" oninput="filterJournal()">
+        <span style="color:var(--text3)">→</span>
+        <input type="date" id="journal-end" oninput="filterJournal()">
+      </div>
+      <div class="journal-actions">
+        <button class="btn-primary" onclick="openLogTrade()">+ LOG TRADE</button>
+        <button class="btn-sm" onclick="exportTradesCSV()">⬇ CSV</button>
+      </div>
+    </div>
+    <div id="journal-chart-wrap" class="journal-chart-wrap">
+      <canvas id="pnl-chart" height="80"></canvas>
+    </div>
+    <div id="journal-content" class="journal-content">
+      <div class="loading-screen"><div class="loading-spinner"></div><div>Loading journal...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ MODALS -->
+
+<!-- Widget Modal -->
+<div id="widget-modal" class="modal-overlay" onclick="closeModalOverlay(event,'widget-modal')">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">⊞ iOS SCRIPTABLE WIDGET</div>
+      <button class="modal-close" onclick="closeModal('widget-modal')">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" onclick="switchModalTab('script',this)">SCRIPT</button>
+      <button class="modal-tab" onclick="switchModalTab('setup',this)">SETUP GUIDE</button>
+    </div>
+    <div id="mtab-script" class="modal-tab-content active">
+      <div class="script-toolbar">
+        <span class="script-label">scriptable_ticker.js</span>
+        <button class="btn-copy" id="copy-btn" onclick="copyScript()">⎘ COPY</button>
+      </div>
+      <pre id="widget-code" class="code-block"></pre>
+    </div>
+    <div id="mtab-setup" class="modal-tab-content">
+      <div class="setup-guide">
+        <div class="setup-step"><div class="setup-num">01</div><div class="setup-content"><strong>Install Scriptable</strong><p>Download <a href="https://apps.apple.com/app/scriptable/id1405459188" target="_blank">Scriptable</a> from the App Store (free).</p></div></div>
+        <div class="setup-step"><div class="setup-num">02</div><div class="setup-content"><strong>Create a new script</strong><p>Open Scriptable → tap <kbd>+</kbd> → name it <kbd>StockTicker</kbd>.</p></div></div>
+        <div class="setup-step"><div class="setup-num">03</div><div class="setup-content"><strong>Paste the script</strong><p>Copy the script from the SCRIPT tab and paste it into your new Scriptable script.</p></div></div>
+        <div class="setup-step"><div class="setup-num">04</div><div class="setup-content"><strong>Set your server URL</strong><p>Update <kbd>BASE_URL</kbd> at the top to your server's IP/hostname (e.g. <kbd>http://192.168.x.x:5000</kbd>). Both devices must be on the same network, or deploy to a public host.</p></div></div>
+        <div class="setup-step"><div class="setup-num">05</div><div class="setup-content"><strong>Add to home screen</strong><p>Long-press iOS home screen → tap <kbd>+</kbd> → search Scriptable → choose Small or Medium size → select <kbd>StockTicker</kbd>.</p></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settings-modal" class="modal-overlay" onclick="closeModalOverlay(event,'settings-modal')">
+  <div class="modal-box modal-box-med">
+    <div class="modal-header">
+      <div class="modal-title">⚙ SETTINGS</div>
+      <button class="modal-close" onclick="closeModal('settings-modal')">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="stab-btn-general" onclick="switchSettingsTab('general',this)">GENERAL</button>
+      <button class="modal-tab" id="stab-btn-profiles" onclick="switchSettingsTab('profiles',this)">PROFILES</button>
+      <button class="modal-tab" id="stab-btn-alerts" onclick="switchSettingsTab('alerts',this)">ALERTS</button>
+      <button class="modal-tab" id="stab-btn-data" onclick="switchSettingsTab('data',this)">DATA</button>
+    </div>
+    <!-- General -->
+    <div id="stab-general" class="stab-content active settings-body">
+      <div class="setting-group">
+        <label class="setting-label">REFRESH INTERVAL</label>
+        <select id="settings-interval" onchange="saveGeneralSettings()">
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="900">15 minutes</option>
+        </select>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">DISPLAY DENSITY</label>
+        <select id="settings-density" onchange="saveGeneralSettings()">
+          <option value="compact">Compact</option>
+          <option value="expanded">Expanded</option>
+        </select>
+      </div>
+      <div class="setting-group danger-zone">
+        <button class="btn-danger" onclick="resetApp()">RESET ALL DATA</button>
+      </div>
+    </div>
+    <!-- Profiles -->
+    <div id="stab-profiles" class="stab-content settings-body">
+      <div class="profiles-list" id="profiles-list"></div>
+      <button class="btn-primary" style="margin-top:12px" onclick="openProfileEditor(null)">+ NEW PROFILE</button>
+    </div>
+    <!-- Alerts -->
+    <div id="stab-alerts" class="stab-content settings-body">
+      <p class="step-desc" style="margin-bottom:16px">Notification triggers per ticker:</p>
+      <div id="settings-alerts"></div>
+    </div>
+    <!-- Data -->
+    <div id="stab-data" class="stab-content settings-body">
+      <div class="setting-group">
+        <label class="setting-label">BACKUP & RESTORE</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-ghost" onclick="downloadBackup()">⬇ Export JSON Backup</button>
+          <button class="btn-ghost" onclick="document.getElementById('restore-input').click()">⬆ Import Backup</button>
+          <input type="file" id="restore-input" accept=".json" style="display:none" onchange="importBackup(this)">
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">DATABASE</label>
+        <p class="step-desc">Data is stored in <kbd>data/terminal.db</kbd> (SQLite). On cloud deployments (Render / Railway), set the <kbd>DATABASE_URL</kbd> environment variable to use PostgreSQL.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Profile Editor Modal -->
+<div id="profile-modal" class="modal-overlay" onclick="closeModalOverlay(event,'profile-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="profile-modal-title">NEW PROFILE</div>
+      <button class="modal-close" onclick="closeModal('profile-modal')">✕</button>
+    </div>
+    <div class="settings-body" style="overflow-y:auto;max-height:calc(90vh - 60px)">
+      <input type="hidden" id="pe-id">
+      <div class="setting-group">
+        <label class="setting-label">NAME</label>
+        <input type="text" id="pe-name" placeholder="Profile name..." class="text-input">
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">RISK TOLERANCE</label>
+        <div class="radio-row">
+          <label class="radio-pill"><input type="radio" name="pe-risk" value="Conservative"> Conservative</label>
+          <label class="radio-pill"><input type="radio" name="pe-risk" value="Moderate" checked> Moderate</label>
+          <label class="radio-pill"><input type="radio" name="pe-risk" value="Aggressive"> Aggressive</label>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">HORIZON</label>
+        <div class="radio-row">
+          <label class="radio-pill"><input type="radio" name="pe-horizon" value="Short-term"> Short-term</label>
+          <label class="radio-pill"><input type="radio" name="pe-horizon" value="Swing" checked> Swing</label>
+          <label class="radio-pill"><input type="radio" name="pe-horizon" value="Long-term"> Long-term</label>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">SIGNAL WEIGHTS</label>
+        <div class="sliders">
+          <div class="slider-row"><span class="slider-lbl">MA Crossover</span><input type="range" min="0" max="100" value="25" id="pe-w-ma" oninput="document.getElementById('pe-w-ma-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-ma-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">Volume Spike</span><input type="range" min="0" max="100" value="25" id="pe-w-vol" oninput="document.getElementById('pe-w-vol-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-vol-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">RSI Signal</span><input type="range" min="0" max="100" value="25" id="pe-w-rsi" oninput="document.getElementById('pe-w-rsi-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-rsi-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">Momentum</span><input type="range" min="0" max="100" value="25" id="pe-w-mom" oninput="document.getElementById('pe-w-mom-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-mom-v">25%</span></div>
+        </div>
+      </div>
+      <div class="setting-group three-col">
+        <div class="mini-field"><label class="setting-label">RSI OB</label><input type="number" id="pe-rsi-ob" value="70" min="60" max="90" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">RSI OS</label><input type="number" id="pe-rsi-os" value="30" min="10" max="40" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">MAX TRADES</label><input type="number" id="pe-max-trades" value="3" min="1" max="20" class="number-input"></div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">VOLUME SPIKE THRESHOLD</label>
+        <div class="inline-field"><input type="number" id="pe-vol-thresh" value="1.5" min="1.1" max="5" step="0.1" class="number-input"><span class="inline-lbl">× 30d avg volume</span></div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">MOMENTUM LOOKBACK</label>
+        <div class="inline-field"><input type="number" id="pe-mom-days" value="10" min="3" max="60" class="number-input"><span class="inline-lbl">trading days</span></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('profile-modal')">CANCEL</button>
+        <button class="btn-primary" onclick="saveProfile()">SAVE PROFILE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add/Edit Position Modal -->
+<div id="position-modal" class="modal-overlay" onclick="closeModalOverlay(event,'position-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="position-modal-title">ADD POSITION</div>
+      <button class="modal-close" onclick="closeModal('position-modal')">✕</button>
+    </div>
+    <div class="settings-body">
+      <input type="hidden" id="pos-id">
+      <div class="setting-group">
+        <label class="setting-label">TICKER</label>
+        <div class="input-wrap" style="border-radius:4px">
+          <span class="input-prefix">$</span>
+          <input type="text" id="pos-symbol" placeholder="AAPL" autocapitalize="characters" class="inline-text-input">
+        </div>
+      </div>
+      <div class="setting-group three-col">
+        <div class="mini-field"><label class="setting-label">SHARES</label><input type="number" id="pos-shares" placeholder="10" step="0.001" min="0" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">COST BASIS</label><input type="number" id="pos-cost" placeholder="150.00" step="0.01" min="0" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">DATE</label><input type="date" id="pos-date" class="number-input"></div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">NOTES</label>
+        <textarea id="pos-notes" class="notes-textarea" rows="2" placeholder="Optional notes..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('position-modal')">CANCEL</button>
+        <button class="btn-primary" onclick="savePosition()">SAVE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Log Trade Modal -->
+<div id="trade-modal" class="modal-overlay" onclick="closeModalOverlay(event,'trade-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title">LOG TRADE</div>
+      <button class="modal-close" onclick="closeModal('trade-modal')">✕</button>
+    </div>
+    <div class="settings-body">
+      <input type="hidden" id="trade-id">
+      <div class="setting-group">
+        <label class="setting-label">TICKER</label>
+        <div class="input-wrap" style="border-radius:4px">
+          <span class="input-prefix">$</span>
+          <input type="text" id="trade-symbol" placeholder="AAPL" autocapitalize="characters" class="inline-text-input">
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">ACTION</label>
+        <div class="radio-row">
+          <label class="radio-pill"><input type="radio" name="trade-action" value="Buy" checked> BUY</label>
+          <label class="radio-pill"><input type="radio" name="trade-action" value="Sell"> SELL</label>
+          <label class="radio-pill"><input type="radio" name="trade-action" value="Short"> SHORT</label>
+          <label class="radio-pill"><input type="radio" name="trade-action" value="Cover"> COVER</label>
+        </div>
+      </div>
+      <div class="setting-group three-col">
+        <div class="mini-field"><label class="setting-label">SHARES</label><input type="number" id="trade-shares" placeholder="10" step="0.001" min="0" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">PRICE / SHARE</label><input type="number" id="trade-price" placeholder="150.00" step="0.01" min="0" class="number-input"></div>
+        <div class="mini-field"><label class="setting-label">DATE</label><input type="date" id="trade-date" class="number-input"></div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">REALIZED P&amp;L (on sells)</label>
+        <input type="number" id="trade-pnl" placeholder="Optional" step="0.01" class="number-input" style="width:160px">
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">NOTES</label>
+        <textarea id="trade-notes" class="notes-textarea" rows="2" placeholder="e.g. Acted on BUY signal, earnings play..."></textarea>
+      </div>
+      <div class="setting-group" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="trade-signal-cb">
+        <label for="trade-signal-cb" style="color:var(--text2);font-size:12px">This trade was triggered by a TERMINAL signal</label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('trade-modal')">CANCEL</button>
+        <button class="btn-primary" onclick="saveTrade()">LOG TRADE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Ticker Notes/Tier Modal -->
+<div id="ticker-detail-modal" class="modal-overlay" onclick="closeModalOverlay(event,'ticker-detail-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="td-title">TICKER DETAIL</div>
+      <button class="modal-close" onclick="closeModal('ticker-detail-modal')">✕</button>
+    </div>
+    <div class="settings-body">
+      <input type="hidden" id="td-symbol">
+      <div class="setting-group">
+        <label class="setting-label">WATCHLIST TIER</label>
+        <div class="radio-row">
+          <label class="radio-pill"><input type="radio" name="td-tier" value="Core Hold"> Core Hold</label>
+          <label class="radio-pill"><input type="radio" name="td-tier" value="Active Watch" checked> Active Watch</label>
+          <label class="radio-pill"><input type="radio" name="td-tier" value="Speculative"> Speculative</label>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">NOTES</label>
+        <textarea id="td-notes" class="notes-textarea" rows="3" placeholder="e.g. Waiting for earnings, dad's pick..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('ticker-detail-modal')">CANCEL</button>
+        <button class="btn-primary" onclick="saveTierNotes()">SAVE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
