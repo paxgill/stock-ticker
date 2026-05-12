@@ -75,12 +75,41 @@ def get_active_profile_dict():
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 FMP_BASE    = "https://financialmodelingprep.com/api/v3"
 
+# ─── Finnhub News ─────────────────────────────────────────────────────────────
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+FINNHUB_BASE    = "https://finnhub.io/api/v1"
 
-def _fmp_cache_get(symbol: str, endpoint: str):
+# ─── Sector ETF Map ───────────────────────────────────────────────────────────
+SECTOR_ETFS = {
+    "XLK":  "Technology",
+    "XLF":  "Financials",
+    "XLE":  "Energy",
+    "XLV":  "Health Care",
+    "XLI":  "Industrials",
+    "XLY":  "Consumer Discret.",
+    "XLP":  "Consumer Staples",
+    "XLU":  "Utilities",
+    "XLRE": "Real Estate",
+    "XLB":  "Materials",
+    "XLC":  "Communication",
+}
+
+# ─── News Sentiment Keywords ───────────────────────────────────────────────────
+_BULL = {'beat','beats','growth','surge','surges','rally','rallies','record',
+         'profit','profits','rise','rises','strong','buy','upgrade','upgraded',
+         'bullish','gain','gains','positive','exceeds','raises','outperform',
+         'boost','boosted','higher','soar','soars','lifts','top'}
+_BEAR = {'miss','misses','loss','losses','drop','drops','fall','falls','decline',
+         'declines','down','sell','downgrade','downgraded','bearish','cut','cuts',
+         'reduce','concern','concerns','risk','warning','disappoints','below',
+         'weak','weakness','layoff','layoffs','slump','slumps','disappointing'}
+
+
+def _fmp_cache_get(symbol: str, endpoint: str, ttl_hours: float = 24):
     row = FMPCache.query.filter_by(symbol=symbol, endpoint=endpoint).first()
     if row is None:
         return None
-    if datetime.utcnow() - row.cached_at > timedelta(hours=24):
+    if datetime.utcnow() - row.cached_at > timedelta(hours=ttl_hours):
         return None
     return json.loads(row.data) if row.data else None
 
@@ -192,6 +221,53 @@ def fetch_fmp_fundamentals(symbol: str, yf_ticker=None) -> dict:
         "fcf_positive":       fcf_positive,
     })
     return fund
+
+
+def news_sentiment(text: str) -> str:
+    words = set(text.lower().split())
+    bull = len(words & _BULL)
+    bear = len(words & _BEAR)
+    if bull > bear:  return "Positive"
+    if bear > bull:  return "Negative"
+    return "Neutral"
+
+
+def _fetch_earnings_date(symbol: str) -> str | None:
+    """Get next earnings date string (ISO), cached 24 h."""
+    cached = _fmp_cache_get(symbol, "earnings")
+    if cached is not None:
+        return cached.get("earn_date")
+    earn_date = None
+    try:
+        cal = yf.Ticker(symbol).calendar
+        today = date.today()
+        raw_dates = []
+        if isinstance(cal, dict):
+            raw = cal.get("Earnings Date", [])
+            raw_dates = raw if isinstance(raw, list) else [raw]
+        elif hasattr(cal, "loc"):
+            try:
+                raw = cal.loc["Earnings Date"]
+                raw_dates = raw.tolist() if hasattr(raw, "tolist") else [raw]
+            except (KeyError, TypeError):
+                pass
+        for ed in raw_dates:
+            try:
+                if hasattr(ed, "date"):
+                    ed = ed.date()
+                elif isinstance(ed, str):
+                    ed = date.fromisoformat(str(ed)[:10])
+                else:
+                    continue
+                if ed >= today and (earn_date is None or ed < earn_date):
+                    earn_date = ed
+            except Exception:
+                continue
+        earn_date = earn_date.isoformat() if earn_date else None
+    except Exception:
+        pass
+    _fmp_cache_set(symbol, "earnings", {"earn_date": earn_date})
+    return earn_date
 
 
 def fetch_history(symbol: str, period: str = "65d") -> pd.DataFrame | None:
@@ -839,6 +915,168 @@ def restore():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 400
+
+
+# ─── Ticker Extended Details ──────────────────────────────────────────────────
+@app.route("/api/ticker-details", methods=["POST"])
+def ticker_details():
+    data = request.json or {}
+    tickers = data.get("tickers", [])
+    results = {}
+
+    for symbol in tickers:
+        sym = symbol.upper()
+        try:
+            t   = yf.Ticker(sym)
+            fi  = t.fast_info
+
+            prev_close = getattr(fi, "previous_close", None) or 0
+
+            pre_price  = getattr(fi, "pre_market_price",  None)
+            post_price = getattr(fi, "post_market_price", None)
+
+            def ext_pct(p):
+                if p and prev_close:
+                    return round((float(p) - float(prev_close)) / float(prev_close) * 100, 2)
+                return None
+
+            high52 = getattr(fi, "fifty_two_week_high", None)
+            low52  = getattr(fi, "fifty_two_week_low",  None)
+
+            # Short interest — cache 4 h (involves .info call)
+            short_pct = None
+            cached_si = _fmp_cache_get(sym, "si_ext", ttl_hours=4)
+            if cached_si is not None:
+                short_pct = cached_si.get("short_pct")
+            else:
+                try:
+                    short_pct = t.info.get("shortPercentOfFloat")
+                    _fmp_cache_set(sym, "si_ext", {"short_pct": short_pct})
+                except Exception:
+                    pass
+
+            # Earnings date
+            earn_date    = _fetch_earnings_date(sym)
+            days_to_earn = None
+            if earn_date:
+                days_to_earn = (date.fromisoformat(earn_date) - date.today()).days
+                if days_to_earn < 0:
+                    days_to_earn = None   # past
+
+            results[sym] = {
+                "pre_price":    round(float(pre_price),  2) if pre_price  else None,
+                "pre_pct":      ext_pct(pre_price),
+                "post_price":   round(float(post_price), 2) if post_price else None,
+                "post_pct":     ext_pct(post_price),
+                "high_52w":     round(float(high52), 2) if high52 else None,
+                "low_52w":      round(float(low52),  2) if low52  else None,
+                "short_pct":    round(float(short_pct) * 100, 1) if short_pct else None,
+                "earn_date":    earn_date,
+                "days_to_earn": days_to_earn,
+            }
+        except Exception:
+            results[sym] = {}
+
+    return jsonify(results)
+
+
+# ─── Sector Heatmap ───────────────────────────────────────────────────────────
+@app.route("/api/heatmap")
+def sector_heatmap():
+    sectors = []
+    for sym, name in SECTOR_ETFS.items():
+        try:
+            hist = yf.Ticker(sym).history(period="2d")
+            if len(hist) < 2:
+                continue
+            closes  = hist["Close"].astype(float)
+            prev, cur = float(closes.iloc[-2]), float(closes.iloc[-1])
+            pct = round((cur - prev) / prev * 100, 2) if prev else 0.0
+            sectors.append({"symbol": sym, "name": name,
+                            "pct": pct, "price": round(cur, 2)})
+        except Exception:
+            pass
+
+    n_up = sum(1 for s in sectors if s["pct"] > 0)
+    n_dn = len(sectors) - n_up
+    return jsonify({
+        "sectors": sectors,
+        "n_up": n_up,
+        "n_dn": n_dn,
+        "generated_at": datetime.now().isoformat(),
+    })
+
+
+# ─── News Feed ────────────────────────────────────────────────────────────────
+@app.route("/api/news/<ticker>")
+def ticker_news(ticker):
+    if not FINNHUB_API_KEY:
+        return jsonify([])
+
+    sym = ticker.upper()
+    cached = _fmp_cache_get(sym, "finnhub_news", ttl_hours=4)
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        today     = date.today()
+        from_date = (today - timedelta(days=7)).isoformat()
+        resp = requests.get(
+            f"{FINNHUB_BASE}/company-news",
+            params={"symbol": sym, "from": from_date,
+                    "to": today.isoformat(), "token": FINNHUB_API_KEY},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return jsonify([])
+
+        articles = resp.json() or []
+        results  = []
+        for art in articles[:5]:
+            headline = art.get("headline", "")
+            results.append({
+                "headline":  headline,
+                "source":    art.get("source", ""),
+                "url":       art.get("url", ""),
+                "datetime":  art.get("datetime", 0),
+                "sentiment": news_sentiment(headline),
+            })
+        _fmp_cache_set(sym, "finnhub_news", results)
+        return jsonify(results)
+    except Exception:
+        return jsonify([])
+
+
+# ─── Correlation Matrix ───────────────────────────────────────────────────────
+@app.route("/api/correlation", methods=["POST"])
+def correlation_matrix():
+    data    = request.json or {}
+    tickers = [t.upper() for t in data.get("tickers", [])]
+
+    if len(tickers) < 2:
+        return jsonify({"error": "Need at least 2 tickers", "tickers": [], "matrix": []})
+
+    price_map = {}
+    for sym in tickers:
+        try:
+            hist = yf.Ticker(sym).history(period="60d")
+            if not hist.empty and len(hist) >= 10:
+                price_map[sym] = hist["Close"].astype(float)
+        except Exception:
+            pass
+
+    valid = [k for k in tickers if k in price_map]
+    if len(valid) < 2:
+        return jsonify({"error": "Insufficient data", "tickers": [], "matrix": []})
+
+    df   = pd.DataFrame({k: price_map[k] for k in valid}).dropna()
+    corr = df.corr().round(2)
+
+    return jsonify({
+        "tickers":      list(corr.columns),
+        "matrix":       corr.values.tolist(),
+        "generated_at": datetime.now().isoformat(),
+    })
 
 
 if __name__ == "__main__":

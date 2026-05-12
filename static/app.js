@@ -2,18 +2,20 @@
 // STATE
 // ════════════════════════════════════════════════════════════════
 const S = {
-  watchlist: [],       // [{id, symbol, name, tier, notes, alert_direction, alert_price}]
+  watchlist: [],
   profiles: [],
   activeProfile: null,
   portfolio: [],
   trades: [],
   quotes: {},
+  tickerDetails: {},   // extended: earnings, 52W, short interest, pre/post market
   suggestions: [],
   preferences: { interval: '300', density: 'compact' },
   countdownVal: 0,
   countdownTimer: null,
   notifGranted: false,
   triggeredAlerts: new Set(),
+  theme: localStorage.getItem('pg_theme') || 'dark',
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -30,6 +32,7 @@ const api = {
 // INIT
 // ════════════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', async () => {
+  applyTheme(S.theme);
   document.getElementById('ticker-input').addEventListener('keydown', e => { if (e.key === 'Enter') addTicker(); });
 
   // Load persistent state from backend
@@ -369,11 +372,37 @@ async function fetchAllQuotes() {
     renderDashboard();
     checkAlerts();
     updateMarketStatus();
-    // Refresh portfolio display if on that tab
     if (document.getElementById('tab-portfolio').classList.contains('active')) {
       renderPortfolio();
     }
+    // Fire extended details async — re-renders cards when done
+    fetchTickerDetails();
   } catch (e) { showToast('Failed to fetch quotes. Is Flask running?', 'error'); }
+}
+
+async function fetchTickerDetails() {
+  if (S.watchlist.length === 0) return;
+  try {
+    const data = await api.post('/api/ticker-details', { tickers: S.watchlist.map(t => t.symbol) });
+    S.tickerDetails = data;
+    if (document.getElementById('tab-dashboard').classList.contains('active')) {
+      renderDashboard();
+    }
+  } catch (e) {}
+}
+
+// ── Market helpers ─────────────────────────────────────────────────────────
+function isMarketOpen() {
+  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
+  return day >= 1 && day <= 5 && h >= 9.5 && h < 16;
+}
+function isPreMarket() {
+  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
+  return day >= 1 && day <= 5 && h >= 4 && h < 9.5;
+}
+function isAfterHours() {
+  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
+  return day >= 1 && day <= 5 && h >= 16 && h < 20;
 }
 
 function renderDashboard() {
@@ -386,12 +415,54 @@ function renderDashboard() {
 }
 
 function renderCompact(el) {
+  const mktOpen = isMarketOpen();
+  const showPre  = isPreMarket();
+  const showPost = isAfterHours();
+
   const cards = S.watchlist.map(t => {
-    const q = S.quotes[t.symbol];
+    const q   = S.quotes[t.symbol];
+    const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
     if (!q || q.error) return `<div class="stock-card"><div class="card-sym">${t.symbol}</div><div style="color:var(--red);font-size:11px">${q?.error || 'Loading...'}</div><button class="card-remove" onclick="removeTicker('${t.symbol}')">✕</button></div>`;
     const dir = q.pct_change >= 0 ? 'up' : 'down';
     const alertOn = S.triggeredAlerts.has(t.symbol);
+
+    // ── Extended-hours price ──────────────────────────────────────
+    let extPriceHtml = '';
+    if (!mktOpen && showPre && ext.pre_price) {
+      const pc = ext.pre_pct;
+      extPriceHtml = `<div class="ext-price">Pre-Market: <strong>$${ext.pre_price.toFixed(2)}</strong> <span class="${pc >= 0 ? 'up' : 'down'}">${pc >= 0 ? '+' : ''}${pc?.toFixed(2)}%</span></div>`;
+    } else if (!mktOpen && showPost && ext.post_price) {
+      const pc = ext.post_pct;
+      extPriceHtml = `<div class="ext-price">After-Hours: <strong>$${ext.post_price.toFixed(2)}</strong> <span class="${pc >= 0 ? 'up' : 'down'}">${pc >= 0 ? '+' : ''}${pc?.toFixed(2)}%</span></div>`;
+    }
+
+    // ── 52W range bar ─────────────────────────────────────────────
+    let w52Html = '';
+    if (ext.high_52w && ext.low_52w && ext.high_52w > ext.low_52w) {
+      const pct52 = Math.max(0, Math.min(100,
+        ((q.price - ext.low_52w) / (ext.high_52w - ext.low_52w)) * 100
+      ));
+      w52Html = `
+        <div class="w52-wrap">
+          <div class="w52-labels">
+            <span class="w52-end">52W Low $${ext.low_52w.toFixed(2)}</span>
+            <span class="w52-pct">${pct52.toFixed(0)}% of range</span>
+            <span class="w52-end">$${ext.high_52w.toFixed(2)} 52W High</span>
+          </div>
+          <div class="w52-track"><div class="w52-fill" style="width:${pct52.toFixed(1)}%"></div></div>
+        </div>`;
+    }
+
+    // ── Earnings badge ────────────────────────────────────────────
+    let earnBadge = '';
+    if (ext.days_to_earn != null && ext.days_to_earn >= 0 && ext.days_to_earn <= 30) {
+      const d = ext.days_to_earn;
+      const label = d === 0 ? 'Earnings today' : d === 1 ? 'Earnings tomorrow' : `Earnings in ${d}d`;
+      const cls   = d <= 2 ? 'earn-red' : 'earn-yellow';
+      earnBadge   = `<span class="earn-badge ${cls}">📅 ${label}</span>`;
+    }
+
     return `
       <div class="stock-card ${alertOn ? 'alert-triggered' : ''}">
         <div class="card-accent-bar ${q.above_ma50 ? 'bullish' : 'bearish'}"></div>
@@ -409,6 +480,7 @@ function renderCompact(el) {
           <div class="card-price-block">
             <div class="card-price ${dir}">$${q.price.toFixed(2)}</div>
             <div class="card-change ${dir}">${q.change >= 0 ? '+' : ''}$${q.change.toFixed(2)} (${q.pct_change >= 0 ? '+' : ''}${q.pct_change.toFixed(2)}%)</div>
+            ${extPriceHtml}
           </div>
         </div>
         <div class="card-row">
@@ -418,10 +490,12 @@ function renderCompact(el) {
           <div class="card-stat"><div class="stat-label">MA50</div><div class="stat-val ${q.above_ma50 ? 'bullish' : 'bearish'}">${q.ma50 ? '$' + q.ma50.toFixed(2) : '—'}</div></div>
         </div>
         ${q.rvol != null ? `<div class="card-rvol-row"><span class="rvol-badge rvol-${(q.rvol_tier||'normal').toLowerCase().replace(' ','-')}">RVOL ${q.rvol.toFixed(2)}× ${q.rvol_tier||''}</span></div>` : ''}
+        ${w52Html}
         <div class="card-bottom">
           <div class="card-signals">
             ${q.ma20 ? `<span class="signal-badge ${q.above_ma20 ? 'signal-bull' : 'signal-bear'}">${q.above_ma20 ? '▲' : '▼'} MA20</span>` : ''}
             ${q.ma50 ? `<span class="signal-badge ${q.above_ma50 ? 'signal-bull' : 'signal-bear'}">${q.above_ma50 ? '▲' : '▼'} MA50</span>` : ''}
+            ${earnBadge}
             ${t.notes ? `<span class="signal-badge signal-neutral" title="${t.notes}">📝</span>` : ''}
           </div>
           ${sug ? `<span class="suggestion-badge ${sug.signal === 'BUY' ? 'sug-buy' : sug.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${sug.signal === 'BUY' ? '🟢' : sug.signal === 'SELL' ? '🔴' : '🟡'} ${sug.signal} ${sug.confidence}%</span>` : ''}
@@ -433,10 +507,34 @@ function renderCompact(el) {
 
 function renderExpanded(el) {
   const rows = S.watchlist.map(t => {
-    const q = S.quotes[t.symbol];
+    const q   = S.quotes[t.symbol];
+    const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
-    if (!q || q.error) return `<tr><td class="td-accent"></td><td><div class="td-sym">${t.symbol}</div></td><td colspan="7" style="color:var(--red)">${q?.error || 'Loading...'}</td><td><button onclick="removeTicker('${t.symbol}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:var(--font)">✕</button></td></tr>`;
+    if (!q || q.error) return `<tr><td class="td-accent"></td><td><div class="td-sym">${t.symbol}</div></td><td colspan="8" style="color:var(--red)">${q?.error || 'Loading...'}</td><td><button onclick="removeTicker('${t.symbol}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:var(--font)">✕</button></td></tr>`;
     const dir = q.pct_change >= 0 ? 'up' : 'down';
+
+    // Short interest badge
+    let siBadge = '';
+    if (ext.short_interest != null) {
+      const siPct = (ext.short_interest * 100).toFixed(1);
+      if (ext.short_interest >= 0.30) {
+        siBadge = `<span class="si-badge si-squeeze" title="Short Interest: ${siPct}% of float">🔥 Squeeze Watch</span>`;
+      } else if (ext.short_interest >= 0.15) {
+        siBadge = `<span class="si-badge si-high" title="Short Interest: ${siPct}% of float">▲ High Short</span>`;
+      } else {
+        siBadge = `<span class="si-normal" title="Short Interest: ${siPct}% of float">${siPct}% short</span>`;
+      }
+    }
+
+    // Earnings badge (compact for table)
+    let earnCell = '—';
+    if (ext.days_to_earn != null && ext.days_to_earn >= 0 && ext.days_to_earn <= 30) {
+      const d = ext.days_to_earn;
+      const label = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : `${d}d`;
+      const cls   = d <= 2 ? 'earn-red' : 'earn-yellow';
+      earnCell = `<span class="earn-badge ${cls}">📅 ${label}</span>`;
+    }
+
     return `
       <tr class="${S.triggeredAlerts.has(t.symbol) ? 'alert-triggered' : ''}">
         <td class="td-accent"><div class="td-accent-inner" style="background:${q.above_ma50 ? 'var(--green)' : 'var(--red)'}"></div></td>
@@ -452,10 +550,12 @@ function renderExpanded(el) {
         <td style="color:${q.rsi < 30 ? 'var(--green)' : q.rsi > 70 ? 'var(--red)' : 'var(--text2)'}">${q.rsi ? q.rsi.toFixed(0) : '—'}</td>
         <td class="${q.above_ma20 ? 'up' : 'down'}">${q.ma20 ? '$' + q.ma20.toFixed(2) : '—'}</td>
         <td class="${q.above_ma50 ? 'up' : 'down'}">${q.ma50 ? '$' + q.ma50.toFixed(2) : '—'}</td>
+        <td>${earnCell}</td>
         <td>
           <div class="td-signals">
             ${sug ? `<span class="suggestion-badge ${sug.signal === 'BUY' ? 'sug-buy' : sug.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${sug.signal} ${sug.confidence}%</span>` : ''}
             ${q.ma50 ? `<span class="signal-badge ${q.above_ma50 ? 'signal-bull' : 'signal-bear'}">${q.above_ma50 ? '▲' : '▼'} MA50</span>` : ''}
+            ${siBadge}
           </div>
         </td>
         <td>
@@ -464,7 +564,7 @@ function renderExpanded(el) {
         </td>
       </tr>`;
   }).join('');
-  el.innerHTML = `<table class="expanded-table"><thead><tr><th></th><th>TICKER</th><th>PRICE</th><th>CHG</th><th>% CHG</th><th>VOLUME</th><th>RVOL</th><th>RSI</th><th>MA20</th><th>MA50</th><th>SIGNALS</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  el.innerHTML = `<table class="expanded-table"><thead><tr><th></th><th>TICKER</th><th>PRICE</th><th>CHG</th><th>% CHG</th><th>VOLUME</th><th>RVOL</th><th>RSI</th><th>MA20</th><th>MA50</th><th>EARN</th><th>SIGNALS</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -477,10 +577,12 @@ function switchTab(name, btn) {
   document.getElementById(`tab-${name}`).classList.add('active');
   document.getElementById('dash-toolbar').style.display = name === 'dashboard' ? '' : 'none';
 
-  if (name === 'dashboard') fetchMarketSummary();
-  if (name === 'signals') renderSignalsTab();
-  if (name === 'portfolio') { loadPortfolio().then(renderPortfolio); }
-  if (name === 'journal') { loadTrades().then(renderJournal); }
+  if (name === 'dashboard')   fetchMarketSummary();
+  if (name === 'signals')     renderSignalsTab();
+  if (name === 'heatmap')     renderHeatmapTab();
+  if (name === 'correlation') renderCorrelationTab();
+  if (name === 'portfolio')   { loadPortfolio().then(renderPortfolio); }
+  if (name === 'journal')     { loadTrades().then(renderJournal); }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1364,6 +1466,10 @@ async function openChart(symbol) {
     '<div class="loading-spinner"></div><span>Loading chart data...</span>';
   document.getElementById('chart-container').style.display = 'none';
 
+  // Clear previous news
+  const newsEl = document.getElementById('chart-news');
+  if (newsEl) newsEl.innerHTML = '';
+
   // Default range buttons — reset to 1Y
   document.querySelectorAll('.chart-range-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.range === '1Y');
@@ -1371,6 +1477,7 @@ async function openChart(symbol) {
 
   openModal('chart-modal');
   await loadChartData(symbol, '1Y');
+  loadChartNews(symbol);  // fire-and-forget
 }
 
 async function loadChartData(symbol, range) {
@@ -1747,4 +1854,244 @@ function showToast(msg, type = '') {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ════════════════════════════════════════════════════════════════
+// THEME TOGGLE
+// ════════════════════════════════════════════════════════════════
+function toggleTheme() {
+  S.theme = S.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('pg_theme', S.theme);
+  applyTheme(S.theme);
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+}
+
+// ════════════════════════════════════════════════════════════════
+// HEATMAP TAB
+// ════════════════════════════════════════════════════════════════
+let heatmapRefreshTimer = null;
+
+async function renderHeatmapTab() {
+  const plotEl    = document.getElementById('heatmap-plot');
+  const loadingEl = document.getElementById('heatmap-loading');
+  const summaryEl = document.getElementById('heatmap-summary');
+  if (!plotEl) return;
+
+  // Show loading state
+  if (loadingEl) { loadingEl.style.display = 'flex'; }
+  plotEl.style.display = 'none';
+  if (summaryEl) summaryEl.textContent = '—';
+
+  try {
+    const data = await api.get('/api/heatmap');
+    if (data.error) throw new Error(data.error);
+
+    const etfs   = Object.keys(data);
+    const pcts   = etfs.map(s => data[s].pct);
+    const prices = etfs.map(s => data[s].price);
+    const names  = etfs.map(s => data[s].name || s);
+    const maxAbs = Math.max(...pcts.map(Math.abs), 0.01);
+
+    const bgColors = pcts.map(p => {
+      const norm = p / maxAbs;
+      return norm >= 0
+        ? `rgba(0,230,118,${Math.min(0.95, 0.18 + 0.55 * norm).toFixed(2)})`
+        : `rgba(255,82,82,${Math.min(0.95, 0.18 + 0.55 * Math.abs(norm)).toFixed(2)})`;
+    });
+
+    // Labels: "ETF\nSector Name" + % change as hover text
+    const labels  = etfs.map((sym, i) => `${sym}  ${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%<br><span style="font-size:9px">${names[i]}</span>`);
+    const textArr = pcts.map((p, i) => `${etfs[i]}\n${p >= 0 ? '+' : ''}${p.toFixed(2)}%`);
+
+    const trace = {
+      type: 'treemap',
+      labels: etfs,
+      parents: etfs.map(() => ''),
+      values: etfs.map(() => 1),
+      text: etfs.map((sym, i) =>
+        `${sym}<br>${names[i]}<br><b>${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%</b>`
+      ),
+      textinfo: 'text',
+      hovertemplate: '<b>%{label}</b> — %{customdata[1]}<br>Price: $%{customdata[0]:.2f}<br>Change: %{customdata[2]}<extra></extra>',
+      customdata: etfs.map((sym, i) => [
+        prices[i],
+        names[i],
+        `${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%`,
+      ]),
+      marker: {
+        colors: bgColors,
+        line: { color: '#0a0a0b', width: 2 },
+      },
+      pathbar: { visible: false },
+      textfont: { family: 'JetBrains Mono, monospace', size: 11, color: '#e2e2e8' },
+    };
+
+    const layout = {
+      paper_bgcolor: '#0a0a0b',
+      font: { family: 'JetBrains Mono, monospace', color: '#e2e2e8', size: 11 },
+      margin: { l: 0, r: 0, t: 4, b: 0 },
+    };
+
+    if (loadingEl) loadingEl.style.display = 'none';
+    plotEl.style.display = '';
+    Plotly.newPlot(plotEl, [trace], layout, { responsive: true, displayModeBar: false });
+
+    // Summary line
+    const up     = pcts.filter(p => p > 0).length;
+    const dn     = pcts.filter(p => p < 0).length;
+    const avg    = (pcts.reduce((a, b) => a + b, 0) / pcts.length).toFixed(2);
+    const bestI  = pcts.indexOf(Math.max(...pcts));
+    const worstI = pcts.indexOf(Math.min(...pcts));
+    const now    = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (summaryEl) {
+      summaryEl.innerHTML =
+        `${up} up, ${dn} down &nbsp;·&nbsp; Avg ${avg >= 0 ? '+' : ''}${avg}% &nbsp;·&nbsp; ` +
+        `<span class="up">Best: ${etfs[bestI]} +${pcts[bestI].toFixed(2)}%</span> &nbsp;·&nbsp; ` +
+        `<span class="down">Worst: ${etfs[worstI]} ${pcts[worstI].toFixed(2)}%</span> &nbsp;·&nbsp; ` +
+        `<span style="color:var(--text3)">Updated ${now}</span>`;
+    }
+    const updEl = document.getElementById('heatmap-updated');
+    if (updEl) updEl.textContent = now;
+
+    // Auto-refresh every 5 min while tab is active
+    if (heatmapRefreshTimer) clearTimeout(heatmapRefreshTimer);
+    heatmapRefreshTimer = setTimeout(() => {
+      if (document.getElementById('tab-heatmap')?.classList.contains('active')) renderHeatmapTab();
+    }, 300_000);
+
+  } catch (e) {
+    if (loadingEl) loadingEl.style.display = 'none';
+    plotEl.style.display = '';
+    plotEl.innerHTML = `<div class="no-profile-msg">Failed to load sector data: ${e.message}</div>`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// CORRELATION TAB
+// ════════════════════════════════════════════════════════════════
+async function renderCorrelationTab() {
+  const plotEl    = document.getElementById('corr-plot');
+  const loadingEl = document.getElementById('corr-loading');
+  if (!plotEl) return;
+
+  if (S.watchlist.length < 2) {
+    if (loadingEl) loadingEl.style.display = 'none';
+    plotEl.innerHTML = '<div class="no-profile-msg">Add at least 2 tickers to see a correlation matrix.</div>';
+    return;
+  }
+
+  if (loadingEl) loadingEl.style.display = 'flex';
+  plotEl.innerHTML = '';
+
+  try {
+    const data = await api.post('/api/correlation', { tickers: S.watchlist.map(t => t.symbol) });
+    if (data.error) throw new Error(data.error);
+
+    const symbols = data.symbols;
+    const matrix  = data.matrix;
+    const n       = symbols.length;
+
+    // Text labels for each cell
+    const textMatrix = matrix.map((row, ri) =>
+      row.map((v, ci) => (ri === ci ? '—' : v.toFixed(2)))
+    );
+
+    const trace = {
+      type: 'heatmap',
+      z: matrix,
+      x: symbols,
+      y: symbols,
+      zmin: -1,
+      zmax: 1,
+      colorscale: [
+        [0,    '#ff5252'],
+        [0.25, '#7a1a1a'],
+        [0.5,  '#1e1e26'],
+        [0.75, '#0d3a1e'],
+        [1.0,  '#00e676'],
+      ],
+      showscale: true,
+      colorbar: {
+        thickness: 12,
+        len: 0.75,
+        tickvals: [-1, -0.5, 0, 0.5, 1],
+        ticktext: ['−1.0', '−0.5', '0', '+0.5', '+1.0'],
+        tickfont: { family: 'JetBrains Mono, monospace', size: 9, color: '#9898a8' },
+        outlinecolor: '#2a2a35',
+        outlinewidth: 1,
+      },
+      hovertemplate: '<b>%{y} × %{x}</b><br>r = %{z:.3f}<extra></extra>',
+      text: textMatrix,
+      texttemplate: '%{text}',
+      textfont: { family: 'JetBrains Mono, monospace', size: n > 8 ? 9 : 11, color: '#e2e2e8' },
+    };
+
+    const layout = {
+      paper_bgcolor: '#0a0a0b',
+      plot_bgcolor:  '#111114',
+      font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
+      margin: { l: 60, r: 70, t: 20, b: 60 },
+      xaxis: { color: '#9898a8', gridcolor: '#1e1e26', side: 'bottom', tickangle: n > 6 ? -45 : 0 },
+      yaxis: { color: '#9898a8', gridcolor: '#1e1e26', autorange: 'reversed' },
+    };
+
+    if (loadingEl) loadingEl.style.display = 'none';
+    Plotly.newPlot(plotEl, [trace], layout, { responsive: true, displayModeBar: false });
+
+  } catch (e) {
+    if (loadingEl) loadingEl.style.display = 'none';
+    plotEl.innerHTML = `<div class="no-profile-msg">Failed to compute correlation: ${e.message}</div>`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// CHART NEWS (Finnhub)
+// ════════════════════════════════════════════════════════════════
+async function loadChartNews(symbol) {
+  const el = document.getElementById('chart-news');
+  if (!el) return;
+
+  try {
+    const data = await api.get(`/api/news/${symbol}`);
+
+    // Backend returns {no_key: true} when Finnhub key is missing — silently skip
+    if (!data || data.no_key || !data.articles || data.articles.length === 0) return;
+
+    const articles = data.articles.map(a => {
+      const sentClass = a.sentiment === 'bull' ? 'news-bull'
+                      : a.sentiment === 'bear' ? 'news-bear'
+                      : 'news-neutral';
+      const sentLabel = a.sentiment === 'bull' ? 'BULLISH'
+                      : a.sentiment === 'bear' ? 'BEARISH'
+                      : 'NEUTRAL';
+      // Escape any quotes in the URL to avoid HTML attribute issues
+      const safeUrl = (a.url || '').replace(/"/g, '%22');
+      return `
+        <div class="news-item">
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">
+            <div class="news-headline">${a.headline}</div>
+            <div class="news-meta">
+              <span class="news-source">${a.source}</span>
+              <span>${a.time_ago}</span>
+              <span class="news-sentiment ${sentClass}">${sentLabel}</span>
+            </div>
+          </a>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="news-section-header">
+        <span>RECENT NEWS</span>
+        <span>via Finnhub</span>
+      </div>
+      <div class="news-articles">${articles}</div>`;
+
+  } catch (e) {
+    // Silently fail — news is supplementary
+  }
 }

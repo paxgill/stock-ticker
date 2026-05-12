@@ -749,6 +749,182 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
 .fund-stat .stat-val.up   { color: var(--green); }
 .fund-stat .stat-val.down { color: var(--red); }
 
+/* ─── Earnings Badge ───────────────────────────────────────────── */
+.earn-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 7px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.earn-yellow { background: rgba(255,215,64,.10); color: var(--yellow); border: 1px solid rgba(255,215,64,.30); }
+.earn-red    { background: rgba(255,82,82,.12);  color: var(--red);    border: 1px solid rgba(255,82,82,.30); }
+
+/* ─── Extended-Hours Price ─────────────────────────────────────── */
+.ext-price {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 4px;
+  text-align: right;
+  line-height: 1.4;
+}
+.ext-price strong { color: var(--text2); }
+
+/* ─── 52-Week Range Bar ────────────────────────────────────────── */
+.w52-wrap { margin: 8px 0 4px; }
+.w52-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text3);
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+}
+.w52-end { white-space: nowrap; }
+.w52-pct { color: var(--text2); font-weight: 600; }
+.w52-track {
+  height: 4px;
+  background: var(--bg4);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.w52-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  border-radius: 2px;
+  min-width: 4px;
+  max-width: 100%;
+}
+
+/* ─── Short Interest Badges ────────────────────────────────────── */
+.si-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+.si-squeeze { background: rgba(255,82,82,.12);  color: var(--red);   border: 1px solid rgba(255,82,82,.30); }
+.si-high    { background: rgba(255,159,10,.12); color: #ff9f0a;      border: 1px solid rgba(255,159,10,.30); }
+.si-normal  { color: var(--text2); font-size: 11px; }
+
+/* ─── Heatmap Tab ──────────────────────────────────────────────── */
+.heatmap-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.heatmap-title { font-size: 11px; color: var(--text3); letter-spacing: 0.1em; }
+.heatmap-summary-text { font-size: 11px; color: var(--text2); flex: 1; }
+#heatmap-plot  { width: 100%; height: 460px; }
+#heatmap-loading { display: flex; align-items: center; justify-content: center; gap: 10px; height: 200px; color: var(--text3); font-size: 12px; }
+#heatmap-summary { font-size: 11px; color: var(--text2); flex: 1; }
+
+/* ─── Correlation Tab ──────────────────────────────────────────── */
+.corr-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.06em;
+  background: var(--bg2);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+}
+.corr-leg-item { font-weight: 700; font-size: 12px; margin-right: 2px; }
+.corr-high { color: #00e676; }
+.corr-zero { color: #5a5a6e; }
+.corr-neg  { color: #ff5252; }
+#corr-plot { width: 100%; min-height: 360px; }
+
+/* ─── News Feed ────────────────────────────────────────────────── */
+.chart-news-section { border-top: 1px solid var(--border); }
+.news-section-header {
+  padding: 9px 16px;
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.12em;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg2);
+}
+.news-articles { display: flex; flex-direction: column; }
+.news-item {
+  display: flex;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background .12s;
+}
+.news-item:last-child { border-bottom: none; }
+.news-item:hover { background: var(--bg3); }
+.news-item a { text-decoration: none; flex: 1; }
+.news-headline { font-size: 11px; color: var(--text); line-height: 1.4; margin-bottom: 4px; }
+.news-meta {
+  font-size: 10px;
+  color: var(--text3);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.news-source { color: var(--text2); }
+.news-sentiment {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+.news-bull    { background: rgba(0,230,118,.12); color: var(--green); border: 1px solid rgba(0,230,118,.20); }
+.news-bear    { background: rgba(255,82,82,.12);  color: var(--red);   border: 1px solid rgba(255,82,82,.20); }
+.news-neutral { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
+
+/* ─── Light Theme ──────────────────────────────────────────────── */
+html[data-theme="light"] {
+  --bg:      #f5f5f7;
+  --bg2:     #ffffff;
+  --bg3:     #f0f0f2;
+  --bg4:     #e4e4ea;
+  --border:  #d6d6de;
+  --border2: #bdbdc8;
+  --text:    #1c1c1e;
+  --text2:   #48484f;
+  --text3:   #8a8a96;
+  --accent:  #00a885;
+  --accent2: #0077cc;
+  --green:   #28a745;
+  --green2:  #e6f4ea;
+  --red:     #dc3545;
+  --red2:    #fdecea;
+  --yellow:  #b88a00;
+  --yellow2: #fff8e1;
+  --font:    'JetBrains Mono', 'Courier New', monospace;
+}
+
+/* Plotly overrides for light theme */
+html[data-theme="light"] #plotly-chart { background: #f5f5f7; }
+
+/* Smooth theme transitions — limit to properties that matter */
+body, .stock-card, .modal-box, .expanded-table td,
+.signal-card, .tab-content, .dash-header, .dash-toolbar,
+.fundamentals-card, .fundamentals-header, .fundamentals-body,
+.news-item, .news-section-header {
+  transition: background-color 0.20s ease, border-color 0.20s ease, color 0.15s ease;
+}
+
 /* ─── Print (PDF export) ───────────────────────────────────────── */
 @media print {
   .dash-header, .dash-toolbar, .tab-nav, .tab-content:not(#tab-signals), .disclaimer { display: none !important; }

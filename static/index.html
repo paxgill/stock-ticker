@@ -214,12 +214,15 @@
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="dashboard" onclick="switchTab('dashboard',this)">DASHBOARD</button>
       <button class="tab-btn" data-tab="signals" onclick="switchTab('signals',this)">SIGNALS</button>
+      <button class="tab-btn" data-tab="heatmap" onclick="switchTab('heatmap',this)">HEATMAP</button>
+      <button class="tab-btn" data-tab="correlation" onclick="switchTab('correlation',this)">CORRELATION</button>
       <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
       <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
     </nav>
     <div class="dash-right">
       <span id="market-status" class="market-status"></span>
       <span id="last-updated" class="last-updated">—</span>
+      <button class="btn-icon" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
       <button class="btn-icon" onclick="openWidget()">⊞ WIDGET</button>
       <button class="btn-icon" id="notif-btn" onclick="requestNotifications()">🔔</button>
       <button class="btn-icon" onclick="openSettings()">⚙</button>
@@ -281,6 +284,34 @@
     </div>
     <div id="portfolio-content" class="portfolio-content">
       <div class="loading-screen"><div class="loading-spinner"></div><div>Loading portfolio...</div></div>
+    </div>
+  </div>
+
+  <!-- ─ Tab: Heatmap ──────────────────────────────────────────────── -->
+  <div id="tab-heatmap" class="tab-content">
+    <div class="heatmap-toolbar">
+      <div class="heatmap-summary-text" id="heatmap-summary">—</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="heatmap-updated" class="last-updated">—</span>
+        <button class="btn-sm" onclick="renderHeatmapTab(true)">↺ REFRESH</button>
+      </div>
+    </div>
+    <div id="heatmap-loading" class="chart-loading"><div class="loading-spinner"></div><span>Loading sector data...</span></div>
+    <div id="heatmap-plot" style="width:100%;height:460px;display:none"></div>
+  </div>
+
+  <!-- ─ Tab: Correlation ───────────────────────────────────────────── -->
+  <div id="tab-correlation" class="tab-content">
+    <div class="heatmap-toolbar">
+      <div style="font-size:11px;color:var(--text3)">60-day Pearson correlation of closing prices across your watchlist</div>
+      <button class="btn-sm" onclick="renderCorrelationTab(true)">↺ REFRESH</button>
+    </div>
+    <div id="corr-loading" class="chart-loading" style="display:none"><div class="loading-spinner"></div><span>Computing correlations...</span></div>
+    <div id="corr-plot" style="width:100%;min-height:360px"></div>
+    <div class="corr-legend">
+      <span class="corr-leg-item corr-high">■ Near 1.0</span> stocks move together &nbsp;·&nbsp;
+      <span class="corr-leg-item corr-zero">■ Near 0</span> little relationship &nbsp;·&nbsp;
+      <span class="corr-leg-item corr-neg">■ Near −1.0</span> move opposite
     </div>
   </div>
 
@@ -604,6 +635,7 @@
     <div id="chart-container" style="display:none">
       <div id="plotly-chart"></div>
       <div id="fundamentals-card" class="fundamentals-card"></div>
+      <div id="chart-news" class="chart-news-section"></div>
     </div>
   </div>
 </div>
