@@ -37,23 +37,55 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
     total_weight = 0.0
     weighted_score = 0.0
 
-    # ── 1. MA Crossover ──────────────────────────────────────────────
+    # ── 1. MA Crossover (Golden/Death Cross: MA50 vs MA200) ──────────
     w_ma = float(profile.get("ma_weight", 0.25))
     if w_ma > 0 and len(closes) >= 50:
         ma20 = float(closes.tail(20).mean())
         ma50 = float(closes.tail(50).mean())
-        is_bull = ma20 > ma50
-        score = 1.0 if is_bull else 0.0
-        all_signals.append({
-            "name": "MA Crossover",
-            "direction": "bull" if is_bull else "bear",
-            "score": score,
-            "weight": w_ma,
-            "reason": (
-                f"MA20 ${ma20:.2f} {'>' if is_bull else '<'} MA50 ${ma50:.2f}"
-                f" — {'Golden' if is_bull else 'Death'} Cross"
-            ),
-        })
+
+        if len(closes) >= 200:
+            # Real Golden/Death Cross: MA50 vs MA200
+            ma200 = float(closes.tail(200).mean())
+            is_bull = ma50 > ma200
+            # Detect a recent crossover (within last 3 bars)
+            recently_crossed = False
+            try:
+                ma50_s  = closes.rolling(50,  min_periods=50).mean()
+                ma200_s = closes.rolling(200, min_periods=200).mean()
+                for back in range(1, 4):
+                    if len(closes) > back + 1:
+                        if (float(ma50_s.iloc[-back-1]) < float(ma200_s.iloc[-back-1]) and
+                                float(ma50_s.iloc[-back]) >= float(ma200_s.iloc[-back])):
+                            recently_crossed = True; break
+                        if (float(ma50_s.iloc[-back-1]) > float(ma200_s.iloc[-back-1]) and
+                                float(ma50_s.iloc[-back]) <= float(ma200_s.iloc[-back])):
+                            recently_crossed = True; break
+            except Exception:
+                pass
+            score = 1.0 if is_bull else 0.0
+            cross_tag = "Golden Cross" if is_bull else "Death Cross"
+            recent_tag = " ✓ Recent crossover" if recently_crossed else ""
+            all_signals.append({
+                "name": "MA Crossover",
+                "direction": "bull" if is_bull else "bear",
+                "score": score,
+                "weight": w_ma,
+                "reason": f"MA50 ${ma50:.2f} {'>' if is_bull else '<'} MA200 ${ma200:.2f} — {cross_tag}{recent_tag}",
+            })
+        else:
+            # Not enough data for MA200; use MA20 vs MA50 (no "Golden Cross" label)
+            is_bull = ma20 > ma50
+            score = 1.0 if is_bull else 0.0
+            all_signals.append({
+                "name": "MA Crossover",
+                "direction": "bull" if is_bull else "bear",
+                "score": score,
+                "weight": w_ma,
+                "reason": (
+                    f"MA20 ${ma20:.2f} {'>' if is_bull else '<'} MA50 ${ma50:.2f}"
+                    f" — {'Bullish' if is_bull else 'Bearish'} short-term trend"
+                ),
+            })
         total_weight += w_ma
         weighted_score += w_ma * score
 
@@ -153,6 +185,51 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
             })
             total_weight += w_mom
             weighted_score += w_mom * score
+
+    # ── 5. MA Convergence (bonus signal) ────────────────────────────
+    try:
+        converging = False
+        conv_parts = []
+        if len(closes) >= 50:
+            ma20_s = closes.rolling(20, min_periods=20).mean()
+            ma50_s = closes.rolling(50, min_periods=50).mean()
+            if (len(closes) > 6 and not pd.isna(ma20_s.iloc[-1]) and
+                    not pd.isna(ma50_s.iloc[-1]) and not pd.isna(ma20_s.iloc[-6]) and
+                    not pd.isna(ma50_s.iloc[-6])):
+                gap_now = abs(float(ma20_s.iloc[-1]) - float(ma50_s.iloc[-1]))
+                gap_5d  = abs(float(ma20_s.iloc[-6]) - float(ma50_s.iloc[-6]))
+                if gap_5d > 0 and gap_now < gap_5d * 0.8:
+                    converging = True
+                    conv_parts.append("MA20→MA50 narrowing")
+        if len(closes) >= 200:
+            ma50_s  = closes.rolling(50,  min_periods=50).mean()
+            ma200_s = closes.rolling(200, min_periods=200).mean()
+            if (len(closes) > 11 and not pd.isna(ma50_s.iloc[-1]) and
+                    not pd.isna(ma200_s.iloc[-1]) and not pd.isna(ma50_s.iloc[-11]) and
+                    not pd.isna(ma200_s.iloc[-11])):
+                gap_now = abs(float(ma50_s.iloc[-1])  - float(ma200_s.iloc[-1]))
+                gap_10d = abs(float(ma50_s.iloc[-11]) - float(ma200_s.iloc[-11]))
+                if gap_10d > 0 and gap_now < gap_10d * 0.85:
+                    converging = True
+                    conv_parts.append("MA50→MA200 narrowing")
+        if converging:
+            has_vol_spike = any(
+                s["name"] == "Volume" and s.get("vol_ratio", 0) >= float(profile.get("volume_spike_threshold", 1.5))
+                for s in all_signals
+            )
+            conv_score = 0.80 if has_vol_spike else 0.65
+            conv_weight = 0.10
+            all_signals.append({
+                "name": "MA Convergence",
+                "direction": "bull" if current_price >= prev_price else "neutral",
+                "score": conv_score,
+                "weight": conv_weight,
+                "reason": ", ".join(conv_parts) + (" + volume spike" if has_vol_spike else ""),
+            })
+            total_weight   += conv_weight
+            weighted_score += conv_weight * conv_score
+    except Exception:
+        pass
 
     if total_weight == 0:
         return None

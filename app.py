@@ -273,6 +273,138 @@ def activate_profile(pid):
     return jsonify(profile.to_dict())
 
 
+# ─── Chart Data ──────────────────────────────────────────────────────────────
+@app.route("/api/chart/<ticker>")
+def chart_data(ticker):
+    range_ = request.args.get("range", "1Y")
+    period_map = {
+        "1W": ("5d",  "1h"),
+        "1M": ("1mo", "1d"),
+        "1Y": ("1y",  "1d"),
+        "3Y": ("3y",  "1wk"),
+        "5Y": ("5y",  "1wk"),
+    }
+    period, interval = period_map.get(range_, ("1y", "1d"))
+
+    try:
+        t = yf.Ticker(ticker.upper())
+        hist = t.history(period=period, interval=interval)
+        if hist.empty:
+            return jsonify({"error": "No data"}), 404
+
+        # Dates — keep time for intraday
+        if interval == "1h":
+            dates = [d.strftime("%Y-%m-%d %H:%M") for d in hist.index]
+        else:
+            dates = [str(d.date()) if hasattr(d, "date") else str(d)[:10] for d in hist.index]
+
+        closes  = hist["Close"].astype(float)
+        volumes = hist["Volume"].astype(float)
+
+        def rolling_ma(series, n):
+            if len(series) < n:
+                return [None] * len(series)
+            res = series.rolling(n, min_periods=n).mean()
+            return [round(float(v), 4) if not pd.isna(v) else None for v in res]
+
+        ma20  = rolling_ma(closes, 20)
+        ma50  = rolling_ma(closes, 50)
+        ma200 = rolling_ma(closes, 200)
+
+        avg_vol30 = float(volumes.tail(30).mean()) if len(volumes) >= 30 else float(volumes.mean())
+
+        # Golden / Death cross annotations (MA50 vs MA200)
+        annotations = []
+        if len(closes) >= 201:
+            ma50_s  = closes.rolling(50,  min_periods=50).mean()
+            ma200_s = closes.rolling(200, min_periods=200).mean()
+            for i in range(1, len(closes)):
+                p50, c50   = ma50_s.iloc[i-1],  ma50_s.iloc[i]
+                p200, c200 = ma200_s.iloc[i-1], ma200_s.iloc[i]
+                if pd.isna(p50) or pd.isna(c50) or pd.isna(p200) or pd.isna(c200):
+                    continue
+                if p50 < p200 and c50 >= c200:
+                    annotations.append({"date": dates[i], "type": "golden_cross",
+                                        "label": "☀ Golden Cross", "price": round(float(closes.iloc[i]), 2)})
+                elif p50 > p200 and c50 <= c200:
+                    annotations.append({"date": dates[i], "type": "death_cross",
+                                        "label": "☽ Death Cross",  "price": round(float(closes.iloc[i]), 2)})
+
+        # MA convergence detection
+        convergence = []
+        try:
+            if len(closes) >= 50:
+                ma20_s = closes.rolling(20, min_periods=20).mean()
+                ma50_s = closes.rolling(50, min_periods=50).mean()
+                if not pd.isna(ma20_s.iloc[-1]) and not pd.isna(ma50_s.iloc[-1]) and len(closes) > 6:
+                    gap_now = abs(float(ma20_s.iloc[-1]) - float(ma50_s.iloc[-1]))
+                    gap_5d  = abs(float(ma20_s.iloc[-6]) - float(ma50_s.iloc[-6]))
+                    if gap_5d > 0 and gap_now < gap_5d * 0.8:
+                        convergence.append({"type": "ma20_ma50", "label": "MA20→MA50 Converging",
+                                            "gap_pct": round(gap_now / float(closes.iloc[-1]) * 100, 2)})
+            if len(closes) >= 200:
+                ma50_s  = closes.rolling(50,  min_periods=50).mean()
+                ma200_s = closes.rolling(200, min_periods=200).mean()
+                if not pd.isna(ma50_s.iloc[-1]) and not pd.isna(ma200_s.iloc[-1]) and len(closes) > 11:
+                    gap_now = abs(float(ma50_s.iloc[-1])  - float(ma200_s.iloc[-1]))
+                    gap_10d = abs(float(ma50_s.iloc[-11]) - float(ma200_s.iloc[-11]))
+                    if gap_10d > 0 and gap_now < gap_10d * 0.85:
+                        convergence.append({"type": "ma50_ma200", "label": "MA50→MA200 Converging",
+                                            "gap_pct": round(gap_now / float(closes.iloc[-1]) * 100, 2)})
+        except Exception:
+            pass
+
+        # Fundamentals from yfinance .info
+        fundamentals = {}
+        try:
+            info = t.info
+            fundamentals = {
+                "revenue_growth":  info.get("revenueGrowth"),
+                "earnings_growth": info.get("earningsGrowth"),
+                "profit_margins":  info.get("profitMargins"),
+                "forward_pe":      info.get("forwardPE"),
+                "trailing_pe":     info.get("trailingPE"),
+                "market_cap":      info.get("marketCap"),
+                "beta":            info.get("beta"),
+                "sector":          info.get("sector"),
+                "52w_high":        info.get("fiftyTwoWeekHigh"),
+                "52w_low":         info.get("fiftyTwoWeekLow"),
+                "dividend_yield":  info.get("dividendYield"),
+                "long_name":       info.get("longName"),
+            }
+        except Exception:
+            pass
+
+        strong_buy = bool(
+            fundamentals.get("revenue_growth") is not None and
+            fundamentals.get("revenue_growth", 0) > 0 and
+            fundamentals.get("earnings_growth") is not None and
+            fundamentals.get("earnings_growth", 0) > 0 and
+            len(convergence) > 0
+        )
+
+        return jsonify({
+            "symbol":       ticker.upper(),
+            "range":        range_,
+            "dates":        dates,
+            "open":         [round(float(v), 4) for v in hist["Open"]],
+            "high":         [round(float(v), 4) for v in hist["High"]],
+            "low":          [round(float(v), 4) for v in hist["Low"]],
+            "close":        [round(float(v), 4) for v in closes],
+            "volume":       [int(v) for v in volumes],
+            "avg_vol30":    round(avg_vol30),
+            "ma20":         ma20,
+            "ma50":         ma50,
+            "ma200":        ma200,
+            "annotations":  annotations,
+            "convergence":  convergence,
+            "fundamentals": fundamentals,
+            "strong_buy":   strong_buy,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── Market Summary ───────────────────────────────────────────────────────────
 @app.route("/api/market-summary")
 def market_summary():

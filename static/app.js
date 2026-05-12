@@ -397,9 +397,10 @@ function renderCompact(el) {
         <div class="card-accent-bar ${q.above_ma50 ? 'bullish' : 'bearish'}"></div>
         <button class="card-edit" onclick="openTickerDetail('${t.symbol}')">✎</button>
         <button class="card-remove" onclick="removeTicker('${t.symbol}')">✕</button>
+        <button class="card-chart-btn" onclick="openChart('${t.symbol}')">📈 CHART</button>
         <div class="card-top">
           <div>
-            <div class="card-sym">${t.symbol}</div>
+            <div class="card-sym" style="cursor:pointer" onclick="openChart('${t.symbol}')" title="Open chart">${t.symbol}</div>
             <div class="card-meta">
               <span class="card-name">${t.name}</span>
               <span class="tier-badge ${tierClass(t.tier)}">${t.tier}</span>
@@ -439,7 +440,7 @@ function renderExpanded(el) {
       <tr class="${S.triggeredAlerts.has(t.symbol) ? 'alert-triggered' : ''}">
         <td class="td-accent"><div class="td-accent-inner" style="background:${q.above_ma50 ? 'var(--green)' : 'var(--red)'}"></div></td>
         <td>
-          <div class="td-sym">${t.symbol} <span class="tier-badge ${tierClass(t.tier)}" style="font-size:9px;padding:1px 4px">${t.tier}</span></div>
+          <div class="td-sym" style="cursor:pointer" onclick="openChart('${t.symbol}')" title="Open chart">${t.symbol} <span class="tier-badge ${tierClass(t.tier)}" style="font-size:9px;padding:1px 4px">${t.tier}</span></div>
           <div class="td-name">${t.name}</div>
         </td>
         <td class="${dir}" style="font-weight:700;font-size:14px">$${q.price.toFixed(2)}</td>
@@ -543,9 +544,12 @@ function renderSignalsContent() {
         ${s.description ? `<div class="signal-description">${s.description}</div>` : ''}
         <div class="signal-card-footer">
           <div class="tier-info">Risk: ${s.risk_tolerance || '—'}</div>
-          <button class="log-trade-btn" onclick="openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
-            ${s.signal === 'BUY' ? '+ Log Buy' : s.signal === 'SELL' ? '+ Log Sell' : '+ Log Trade'}
-          </button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="log-trade-btn" onclick="openChart('${s.symbol}')">📈 Chart</button>
+            <button class="log-trade-btn" onclick="openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
+              ${s.signal === 'BUY' ? '+ Log Buy' : s.signal === 'SELL' ? '+ Log Sell' : '+ Log Trade'}
+            </button>
+          </div>
         </div>
       </div>`;
   }).join('');
@@ -1340,6 +1344,259 @@ Script.complete();
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 function closeModalOverlay(e, id) { if (e.target === document.getElementById(id)) closeModal(id); }
+
+// ════════════════════════════════════════════════════════════════
+// INTERACTIVE CHART
+// ════════════════════════════════════════════════════════════════
+let currentChartSymbol = null;
+let currentChartRange  = '1Y';
+let chartData          = null;
+
+async function openChart(symbol) {
+  currentChartSymbol = symbol;
+  currentChartRange  = '1Y';
+
+  document.getElementById('chart-modal-title').textContent = `${symbol} — CHART`;
+  document.getElementById('chart-loading').style.display   = 'flex';
+  document.getElementById('chart-loading').innerHTML =
+    '<div class="loading-spinner"></div><span>Loading chart data...</span>';
+  document.getElementById('chart-container').style.display = 'none';
+
+  // Default range buttons — reset to 1Y
+  document.querySelectorAll('.chart-range-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === '1Y');
+  });
+
+  openModal('chart-modal');
+  await loadChartData(symbol, '1Y');
+}
+
+async function loadChartData(symbol, range) {
+  try {
+    chartData = await api.get(`/api/chart/${symbol}?range=${range}`);
+    if (chartData.error) throw new Error(chartData.error);
+    document.getElementById('chart-loading').style.display   = 'none';
+    document.getElementById('chart-container').style.display = 'block';
+    renderPlotlyChart(chartData);
+    renderFundamentals(chartData);
+  } catch (e) {
+    document.getElementById('chart-loading').innerHTML =
+      `<span style="color:var(--red)">Failed to load chart: ${e.message}</span>`;
+  }
+}
+
+async function setChartRange(range, btn) {
+  currentChartRange = range;
+  document.querySelectorAll('.chart-range-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('chart-loading').style.display   = 'flex';
+  document.getElementById('chart-loading').innerHTML =
+    '<div class="loading-spinner"></div><span>Loading chart data...</span>';
+  document.getElementById('chart-container').style.display = 'none';
+  await loadChartData(currentChartSymbol, range);
+}
+
+function renderPlotlyChart(data) {
+  const traces = [];
+
+  // ── Candlestick ───────────────────────────────────────────────
+  traces.push({
+    type: 'candlestick',
+    x: data.dates,
+    open:  data.open,
+    high:  data.high,
+    low:   data.low,
+    close: data.close,
+    name:  data.symbol,
+    increasing: { line: { color: '#00e676' }, fillcolor: 'rgba(0,230,118,0.7)' },
+    decreasing: { line: { color: '#ff5252' }, fillcolor: 'rgba(255,82,82,0.7)' },
+    showlegend: false,
+    xaxis: 'x', yaxis: 'y',
+    whiskerwidth: 0,
+  });
+
+  // ── MA overlays ───────────────────────────────────────────────
+  const maConfigs = [
+    { key: 'ma20',  name: 'MA20',  color: '#ff9f0a', checkId: 'ma20-toggle'  },
+    { key: 'ma50',  name: 'MA50',  color: '#30d158', checkId: 'ma50-toggle'  },
+    { key: 'ma200', name: 'MA200', color: '#0a84ff', checkId: 'ma200-toggle' },
+  ];
+  maConfigs.forEach(({ key, name, color, checkId }) => {
+    if (!data[key]) return;
+    const checked = document.getElementById(checkId)?.checked !== false;
+    traces.push({
+      type: 'scatter',
+      mode: 'lines',
+      x: data.dates,
+      y: data[key],
+      name,
+      line: { color, width: 1.5 },
+      xaxis: 'x', yaxis: 'y',
+      visible: checked ? true : 'legendonly',
+      connectgaps: false,
+    });
+  });
+
+  // ── Volume bars ───────────────────────────────────────────────
+  const avgVol = data.avg_vol30 || 1;
+  const volColors = data.volume.map((v, i) => {
+    const up   = i === 0 || data.close[i] >= data.close[i - 1];
+    const high = v > avgVol;
+    if (high) return up ? 'rgba(0,230,118,0.65)' : 'rgba(255,82,82,0.65)';
+    return       up ? 'rgba(0,230,118,0.22)'  : 'rgba(255,82,82,0.22)';
+  });
+  traces.push({
+    type: 'bar',
+    x: data.dates,
+    y: data.volume,
+    name: 'Volume',
+    marker: { color: volColors },
+    xaxis: 'x', yaxis: 'y2',
+    showlegend: false,
+  });
+
+  // ── Crossover annotations ─────────────────────────────────────
+  const plotAnnotations = (data.annotations || []).map(a => ({
+    x: a.date, y: a.price,
+    xref: 'x', yref: 'y',
+    text: a.label,
+    showarrow: true,
+    arrowhead: 2,
+    arrowsize: 0.8,
+    arrowcolor: a.type === 'golden_cross' ? '#ffd740' : '#9898a8',
+    font: { color: a.type === 'golden_cross' ? '#ffd740' : '#9898a8', size: 10,
+            family: 'JetBrains Mono, monospace' },
+    bgcolor: 'rgba(10,10,11,0.85)',
+    bordercolor: a.type === 'golden_cross' ? '#ffd740' : '#9898a8',
+    borderwidth: 1, borderpad: 3,
+    ay: a.type === 'golden_cross' ? -36 : 36,
+  }));
+
+  const layout = {
+    paper_bgcolor: '#0a0a0b',
+    plot_bgcolor:  '#111114',
+    font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
+    margin: { l: 10, r: 70, t: 10, b: 40 },
+    xaxis: {
+      type: 'category',
+      rangeslider: { visible: false },
+      gridcolor: '#1e1e26',
+      color: '#5a5a6e',
+      tickangle: -30,
+      nticks: 10,
+      showgrid: true,
+    },
+    yaxis: {
+      domain: [0.22, 1],
+      gridcolor: '#1e1e26',
+      color: '#5a5a6e',
+      side: 'right',
+      tickprefix: '$',
+      showgrid: true,
+    },
+    yaxis2: {
+      domain: [0, 0.17],
+      gridcolor: '#1e1e26',
+      color: '#5a5a6e',
+      side: 'right',
+      showgrid: false,
+    },
+    legend: {
+      x: 0.01, y: 0.99,
+      bgcolor: 'rgba(10,10,11,0.75)',
+      bordercolor: '#2a2a35',
+      borderwidth: 1,
+      font: { size: 10 },
+    },
+    annotations: plotAnnotations,
+    hovermode: 'x unified',
+    hoverlabel: { bgcolor: '#18181d', bordercolor: '#363645',
+                  font: { family: 'JetBrains Mono, monospace', size: 11 } },
+  };
+
+  Plotly.newPlot('plotly-chart', traces, layout, {
+    responsive: true,
+    displayModeBar: false,
+    scrollZoom: true,
+  });
+}
+
+function toggleMA(maKey, checkbox) {
+  if (!chartData) return;
+  const nameMap = { ma20: 'MA20', ma50: 'MA50', ma200: 'MA200' };
+  const name = nameMap[maKey];
+  const div = document.getElementById('plotly-chart');
+  if (!div || !div.data) return;
+  const idx = div.data.findIndex(t => t.name === name);
+  if (idx < 0) return;
+  Plotly.restyle('plotly-chart', { visible: checkbox.checked ? true : 'legendonly' }, [idx]);
+}
+
+function renderFundamentals(data) {
+  const el = document.getElementById('fundamentals-card');
+  if (!el) return;
+
+  const f   = data.fundamentals || {};
+  const cvg = data.convergence  || [];
+
+  const fmtPct = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
+  const fmtPE  = v => v == null ? '—' : v.toFixed(1) + 'x';
+  const fmtCap = v => {
+    if (v == null) return '—';
+    if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
+    if (v >= 1e9)  return '$' + (v / 1e9).toFixed(1)  + 'B';
+    if (v >= 1e6)  return '$' + (v / 1e6).toFixed(1)  + 'M';
+    return '$' + v.toLocaleString();
+  };
+  const colorCls = (v, invert = false) => {
+    if (v == null) return '';
+    return (invert ? v < 0 : v > 0) ? 'up' : 'down';
+  };
+
+  const stats = [
+    { label: 'REVENUE GROWTH',  val: fmtPct(f.revenue_growth),  cls: colorCls(f.revenue_growth)  },
+    { label: 'EARNINGS GROWTH', val: fmtPct(f.earnings_growth), cls: colorCls(f.earnings_growth) },
+    { label: 'PROFIT MARGIN',   val: fmtPct(f.profit_margins),  cls: colorCls(f.profit_margins)  },
+    { label: 'FORWARD P/E',     val: fmtPE(f.forward_pe),       cls: '' },
+    { label: 'MARKET CAP',      val: fmtCap(f.market_cap),      cls: '' },
+    { label: 'BETA',            val: f.beta != null ? f.beta.toFixed(2) : '—', cls: '' },
+    { label: '52W HIGH',        val: f['52w_high'] != null ? '$' + f['52w_high'].toFixed(2) : '—', cls: '' },
+    { label: '52W LOW',         val: f['52w_low']  != null ? '$' + f['52w_low'].toFixed(2)  : '—', cls: '' },
+    { label: 'DIV YIELD',       val: fmtPct(f.dividend_yield),  cls: '' },
+    { label: 'SECTOR',          val: f.sector || '—',           cls: '' },
+  ];
+
+  const strongBuyHtml = data.strong_buy
+    ? `<div class="strong-buy-flag">★ STRONG BUY — Positive revenue &amp; earnings growth with MA convergence</div>`
+    : '';
+
+  const cvgHtml = cvg.length > 0
+    ? `<div class="convergence-row">${cvg.map(c => `<span class="convergence-badge">⟳ ${c.label}</span>`).join('')}</div>`
+    : '';
+
+  el.innerHTML = `
+    ${strongBuyHtml}
+    ${cvgHtml}
+    <div class="fundamentals-header" onclick="toggleFundamentals()">
+      <div class="fundamentals-title">FUNDAMENTALS</div>
+      <div class="fundamentals-chevron" id="fund-chevron">▼</div>
+    </div>
+    <div class="fundamentals-body" id="fundamentals-body">
+      ${stats.map(s => `
+        <div class="fund-stat">
+          <div class="stat-label">${s.label}</div>
+          <div class="stat-val ${s.cls}">${s.val}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function toggleFundamentals() {
+  const body    = document.getElementById('fundamentals-body');
+  const chevron = document.getElementById('fund-chevron');
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  if (chevron) { chevron.textContent = open ? '▲' : '▼'; chevron.classList.toggle('open', open); }
+}
 
 // ════════════════════════════════════════════════════════════════
 // ELECTRON INTEGRATION

@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 <body>
 
@@ -571,6 +572,37 @@
         <button class="btn-ghost" onclick="closeModal('ticker-detail-modal')">CANCEL</button>
         <button class="btn-primary" onclick="saveTierNotes()">SAVE</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chart Modal -->
+<div id="chart-modal" class="modal-overlay" onclick="closeModalOverlay(event,'chart-modal')">
+  <div class="modal-box modal-box-chart">
+    <div class="modal-header chart-modal-header">
+      <div class="modal-title" id="chart-modal-title">CHART</div>
+      <div class="chart-header-controls">
+        <div class="chart-range-tabs">
+          <button class="chart-range-btn active" data-range="1W" onclick="setChartRange('1W',this)">1W</button>
+          <button class="chart-range-btn" data-range="1M" onclick="setChartRange('1M',this)">1M</button>
+          <button class="chart-range-btn" data-range="1Y" onclick="setChartRange('1Y',this)">1Y</button>
+          <button class="chart-range-btn" data-range="3Y" onclick="setChartRange('3Y',this)">3Y</button>
+          <button class="chart-range-btn" data-range="5Y" onclick="setChartRange('5Y',this)">5Y</button>
+        </div>
+        <div class="chart-ma-toggles">
+          <label class="ma-toggle"><input type="checkbox" id="ma20-toggle" checked onchange="toggleMA('ma20',this)"><span class="ma20-label">MA20</span></label>
+          <label class="ma-toggle"><input type="checkbox" id="ma50-toggle" checked onchange="toggleMA('ma50',this)"><span class="ma50-label">MA50</span></label>
+          <label class="ma-toggle"><input type="checkbox" id="ma200-toggle" checked onchange="toggleMA('ma200',this)"><span class="ma200-label">MA200</span></label>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeModal('chart-modal')">✕</button>
+    </div>
+    <div id="chart-loading" class="chart-loading">
+      <div class="loading-spinner"></div><span>Loading chart data...</span>
+    </div>
+    <div id="chart-container" style="display:none">
+      <div id="plotly-chart"></div>
+      <div id="fundamentals-card" class="fundamentals-card"></div>
     </div>
   </div>
 </div>

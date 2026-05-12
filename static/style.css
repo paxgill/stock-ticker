@@ -517,6 +517,153 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
   color: var(--text3);
 }
 
+/* ─── Chart Modal ──────────────────────────────────────────────── */
+.modal-box-chart { max-width: 1020px; }
+
+.chart-modal-header {
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+}
+.chart-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.chart-range-tabs { display: flex; gap: 4px; }
+.chart-range-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text3);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.chart-range-btn:hover { border-color: var(--text2); color: var(--text2); }
+.chart-range-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0,212,170,.08);
+}
+
+.chart-ma-toggles { display: flex; gap: 14px; flex-wrap: wrap; }
+.ma-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  user-select: none;
+}
+.ma-toggle input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); width: 12px; height: 12px; }
+.ma20-label  { color: #ff9f0a; font-weight: 600; }
+.ma50-label  { color: #30d158; font-weight: 600; }
+.ma200-label { color: #0a84ff; font-weight: 600; }
+
+.chart-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 80px 20px;
+  color: var(--text3);
+  font-size: 12px;
+  justify-content: center;
+  letter-spacing: 0.06em;
+}
+
+#plotly-chart {
+  width: 100%;
+  height: 440px;
+  background: var(--bg);
+}
+
+/* ─── Stock Card Chart Button ───────────────────────────────────── */
+.card-chart-btn {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text3);
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 3px 7px;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  transition: all .15s;
+  opacity: 0;
+}
+.stock-card:hover .card-chart-btn { opacity: 1; }
+.card-chart-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+
+/* ─── Fundamentals Card ─────────────────────────────────────────── */
+.fundamentals-card {
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+}
+.strong-buy-flag {
+  margin: 0;
+  padding: 10px 16px;
+  background: rgba(0,230,118,.07);
+  border-bottom: 1px solid rgba(0,230,118,.2);
+  font-size: 12px;
+  color: var(--green);
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.convergence-row {
+  padding: 6px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.convergence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255,159,10,.08);
+  border: 1px solid rgba(255,159,10,.3);
+  color: #ff9f0a;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+.fundamentals-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.fundamentals-header:hover { background: var(--bg3); }
+.fundamentals-title { font-size: 10px; letter-spacing: 0.12em; color: var(--text3); }
+.fundamentals-chevron { color: var(--text3); font-size: 10px; transition: transform .2s; }
+.fundamentals-chevron.open { transform: rotate(180deg); }
+.fundamentals-body {
+  display: none;
+  padding: 12px 16px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 14px;
+}
+.fundamentals-body.open { display: grid; }
+.fund-stat .stat-label { font-size: 9px; color: var(--text3); letter-spacing: 0.12em; margin-bottom: 3px; }
+.fund-stat .stat-val   { font-size: 13px; font-weight: 600; color: var(--text2); }
+.fund-stat .stat-val.up   { color: var(--green); }
+.fund-stat .stat-val.down { color: var(--red); }
+
 /* ─── Print (PDF export) ───────────────────────────────────────── */
 @media print {
   .dash-header, .dash-toolbar, .tab-nav, .tab-content:not(#tab-signals), .disclaimer { display: none !important; }
@@ -534,4 +681,10 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
   .dashboard-content, .portfolio-content, .journal-content, .signals-content { padding: 10px 12px; }
   .three-col { grid-template-columns: 1fr 1fr; }
   .tab-btn { font-size: 10px; padding: 6px 10px; }
+  /* Chart modal on mobile */
+  .modal-box-chart { max-height: 100vh; border-radius: 0; }
+  #plotly-chart { height: 300px; }
+  .chart-header-controls { gap: 10px; }
+  .chart-ma-toggles { gap: 10px; }
+  .fundamentals-body { grid-template-columns: repeat(2, 1fr); }
 }

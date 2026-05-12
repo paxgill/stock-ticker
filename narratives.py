@@ -247,6 +247,12 @@ def generate_trade_description(analysis: dict) -> str:
                         "room to run before hitting overbought levels."
                     )
 
+        elif name == "MA Convergence":
+            if direction in ("bull", "neutral"):
+                detail_parts.append(
+                    "Moving averages are converging, suggesting a potential trend change is building."
+                )
+
         elif name == "Momentum":
             if mom_pct is not None:
                 if direction == "bull":
