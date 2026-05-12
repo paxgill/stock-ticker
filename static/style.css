@@ -607,9 +607,66 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
 
 #plotly-chart {
   width: 100%;
-  height: 460px;
+  height: 560px;
   background: var(--bg);
 }
+
+/* ─── RVOL Badge ────────────────────────────────────────────────── */
+.card-rvol-row {
+  margin-top: 7px;
+}
+.rvol-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+.rvol-low       { background: rgba(152,152,168,.1); color: var(--text3);  border: 1px solid rgba(152,152,168,.2); }
+.rvol-normal    { background: rgba(152,152,168,.08); color: var(--text2); border: 1px solid rgba(152,152,168,.15); }
+.rvol-elevated  { background: rgba(255,159,10,.1); color: #ff9f0a;        border: 1px solid rgba(255,159,10,.3); }
+.rvol-in-play   { background: rgba(0,212,170,.12); color: var(--accent);  border: 1px solid rgba(0,212,170,.3); }
+
+/* ─── FMP Screen ────────────────────────────────────────────────── */
+.fmp-screen-row {
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.fmp-screen-label {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text3);
+  white-space: nowrap;
+}
+.fmp-screen-checks {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fmp-check-item {
+  font-size: 10px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fmp-pass { color: var(--green); font-weight: 700; }
+.fmp-fail { color: var(--red);   font-weight: 700; }
+.data-src-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.src-fmp { background: rgba(0,153,255,.12); color: var(--accent2); border: 1px solid rgba(0,153,255,.25); }
+.src-yf  { background: rgba(152,152,168,.08); color: var(--text3); border: 1px solid rgba(152,152,168,.2); }
 
 /* ─── Stock Card Chart Button ───────────────────────────────────── */
 .card-chart-btn {
@@ -711,7 +768,7 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
   .tab-btn { font-size: 10px; padding: 6px 10px; }
   /* Chart modal on mobile */
   .modal-box-chart { max-height: 100vh; border-radius: 0; }
-  #plotly-chart { height: 300px; }
+  #plotly-chart { height: 380px; }
   .chart-header-controls { gap: 10px; }
   .chart-ma-toggles { gap: 10px; }
   .fundamentals-body { grid-template-columns: repeat(2, 1fr); }

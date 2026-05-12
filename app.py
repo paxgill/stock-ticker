@@ -2,15 +2,16 @@ import os
 import csv
 import json
 import io
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
+import requests
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
 
-from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference
-from analysis import analyze_ticker, compute_rsi, DEFAULT_PROFILE
+from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference, FMPCache
+from analysis import analyze_ticker, compute_rsi, compute_rvol, rvol_tier, DEFAULT_PROFILE
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
@@ -68,6 +69,129 @@ def get_active_profile_dict():
     if p:
         return p.to_dict()
     return DEFAULT_PROFILE.copy()
+
+
+# ─── FMP Fundamentals ────────────────────────────────────────────────────────
+FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
+FMP_BASE    = "https://financialmodelingprep.com/api/v3"
+
+
+def _fmp_cache_get(symbol: str, endpoint: str):
+    row = FMPCache.query.filter_by(symbol=symbol, endpoint=endpoint).first()
+    if row is None:
+        return None
+    if datetime.utcnow() - row.cached_at > timedelta(hours=24):
+        return None
+    return json.loads(row.data) if row.data else None
+
+
+def _fmp_cache_set(symbol: str, endpoint: str, data):
+    row = FMPCache.query.filter_by(symbol=symbol, endpoint=endpoint).first()
+    if row:
+        row.data = json.dumps(data)
+        row.cached_at = datetime.utcnow()
+    else:
+        db.session.add(FMPCache(symbol=symbol, endpoint=endpoint, data=json.dumps(data)))
+    db.session.commit()
+
+
+def _fmp_get(path: str, symbol: str, cache_key: str, params: dict = None):
+    cached = _fmp_cache_get(symbol, cache_key)
+    if cached is not None:
+        return cached
+    try:
+        p = dict(params or {})
+        p["apikey"] = FMP_API_KEY
+        resp = requests.get(f"{FMP_BASE}/{path}", params=p, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json()
+            _fmp_cache_set(symbol, cache_key, data)
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def fetch_fmp_fundamentals(symbol: str, yf_ticker=None) -> dict:
+    """Return fundamentals dict. Uses FMP when key is set, yfinance otherwise."""
+    base = {}
+    if yf_ticker is not None:
+        try:
+            info = yf_ticker.info
+            base = {
+                "long_name":      info.get("longName"),
+                "sector":         info.get("sector"),
+                "market_cap":     info.get("marketCap"),
+                "beta":           info.get("beta"),
+                "52w_high":       info.get("fiftyTwoWeekHigh"),
+                "52w_low":        info.get("fiftyTwoWeekLow"),
+                "dividend_yield": info.get("dividendYield"),
+                "forward_pe":     info.get("forwardPE"),
+                "trailing_pe":    info.get("trailingPE"),
+            }
+        except Exception:
+            pass
+
+    if not FMP_API_KEY:
+        try:
+            info = yf_ticker.info if yf_ticker else {}
+            return {
+                **base,
+                "revenue_growth":     info.get("revenueGrowth"),
+                "earnings_growth":    info.get("earningsGrowth"),
+                "profit_margins":     info.get("profitMargins"),
+                "revenue_3q_growth":  None,
+                "earnings_3q_growth": None,
+                "fcf_positive":       None,
+                "data_source":        "yfinance",
+            }
+        except Exception:
+            return {**base, "data_source": "yfinance"}
+
+    sym = symbol.upper()
+    income   = _fmp_get(f"income-statement/{sym}",    sym, "income_q",   {"period": "quarter", "limit": 5})
+    cashflow = _fmp_get(f"cash-flow-statement/{sym}", sym, "cashflow_q", {"period": "quarter", "limit": 5})
+    ratios   = _fmp_get(f"ratios-ttm/{sym}",          sym, "ratios_ttm")
+
+    fund = dict(base)
+    fund["data_source"] = "fmp"
+
+    revenue_3q = earnings_3q = fcf_positive = None
+    revenue_growth = earnings_growth = profit_margins = None
+
+    if income and len(income) >= 4:
+        revs = [q.get("revenue", 0) or 0 for q in income[:4]]
+        nets = [q.get("netIncome", 0) or 0 for q in income[:4]]
+        revenue_3q  = revs[0] > revs[1] and revs[1] > revs[2]
+        earnings_3q = nets[0] > nets[1] and nets[1] > nets[2]
+        if len(income) >= 5 and revs[4] if len(income) > 4 else revs[3]:
+            base_rev = revs[4] if len(income) > 4 else revs[3]
+            if base_rev:
+                revenue_growth = (revs[0] - base_rev) / abs(base_rev)
+        base_net = nets[4] if len(income) > 4 else nets[3]
+        if base_net:
+            earnings_growth = (nets[0] - base_net) / abs(base_net)
+
+    if cashflow and len(cashflow) >= 1:
+        fcf = cashflow[0].get("freeCashFlow")
+        if fcf is not None:
+            fcf_positive = fcf > 0
+
+    if ratios and len(ratios) >= 1:
+        r = ratios[0]
+        if not fund.get("trailing_pe"):
+            fund["trailing_pe"] = r.get("peRatioTTM")
+        profit_margins = r.get("netProfitMarginTTM")
+
+    fund.update({
+        "revenue_growth":     revenue_growth,
+        "earnings_growth":    earnings_growth,
+        "profit_margins":     profit_margins,
+        "revenue_3q_growth":  revenue_3q,
+        "earnings_3q_growth": earnings_3q,
+        "fcf_positive":       fcf_positive,
+    })
+    return fund
 
 
 def fetch_history(symbol: str, period: str = "65d") -> pd.DataFrame | None:
@@ -133,26 +257,31 @@ def get_quotes():
             avg_vol30 = float(volumes.tail(30).mean()) if len(volumes) >= 30 else vol
             vol_ratio = round(vol / avg_vol30, 2) if avg_vol30 > 0 else 1.0
 
+            rvol = round(compute_rvol(volumes), 2)
+            rvol_label = rvol_tier(rvol)
+
             n = 10
             mom_pct = None
             if len(closes) > n:
                 mom_pct = round((current / float(closes.iloc[-n - 1]) - 1) * 100, 2)
 
             results[symbol.upper()] = {
-                "symbol": symbol.upper(),
-                "price": round(current, 2),
-                "change": round(change, 2),
-                "pct_change": round(pct, 2),
-                "volume": fmt_vol(int(vol)),
-                "volume_raw": int(vol),
-                "vol_ratio": vol_ratio,
-                "ma20": round(ma20, 2) if ma20 else None,
-                "ma50": round(ma50, 2) if ma50 else None,
-                "above_ma20": current > ma20 if ma20 else None,
-                "above_ma50": current > ma50 if ma50 else None,
-                "rsi": round(rsi, 1) if rsi else None,
+                "symbol":       symbol.upper(),
+                "price":        round(current, 2),
+                "change":       round(change, 2),
+                "pct_change":   round(pct, 2),
+                "volume":       fmt_vol(int(vol)),
+                "volume_raw":   int(vol),
+                "vol_ratio":    vol_ratio,
+                "rvol":         rvol,
+                "rvol_tier":    rvol_label,
+                "ma20":         round(ma20, 2) if ma20 else None,
+                "ma50":         round(ma50, 2) if ma50 else None,
+                "above_ma20":   current > ma20 if ma20 else None,
+                "above_ma50":   current > ma50 if ma50 else None,
+                "rsi":          round(rsi, 1) if rsi else None,
                 "momentum_pct": mom_pct,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp":    datetime.now().isoformat(),
             }
         except Exception as e:
             results[symbol.upper()] = {"error": str(e), "symbol": symbol.upper()}
@@ -354,34 +483,22 @@ def chart_data(ticker):
         except Exception:
             pass
 
-        # Fundamentals from yfinance .info
-        fundamentals = {}
-        try:
-            info = t.info
-            fundamentals = {
-                "revenue_growth":  info.get("revenueGrowth"),
-                "earnings_growth": info.get("earningsGrowth"),
-                "profit_margins":  info.get("profitMargins"),
-                "forward_pe":      info.get("forwardPE"),
-                "trailing_pe":     info.get("trailingPE"),
-                "market_cap":      info.get("marketCap"),
-                "beta":            info.get("beta"),
-                "sector":          info.get("sector"),
-                "52w_high":        info.get("fiftyTwoWeekHigh"),
-                "52w_low":         info.get("fiftyTwoWeekLow"),
-                "dividend_yield":  info.get("dividendYield"),
-                "long_name":       info.get("longName"),
-            }
-        except Exception:
-            pass
+        fundamentals = fetch_fmp_fundamentals(ticker.upper(), t)
 
-        strong_buy = bool(
-            fundamentals.get("revenue_growth") is not None and
-            fundamentals.get("revenue_growth", 0) > 0 and
-            fundamentals.get("earnings_growth") is not None and
-            fundamentals.get("earnings_growth", 0) > 0 and
-            len(convergence) > 0
-        )
+        # Strong buy: FMP 3Q checks when available, else yfinance growth flags
+        if fundamentals.get("data_source") == "fmp":
+            strong_buy = bool(
+                fundamentals.get("revenue_3q_growth") is True and
+                fundamentals.get("earnings_3q_growth") is True and
+                fundamentals.get("fcf_positive") is True and
+                len(convergence) > 0
+            )
+        else:
+            strong_buy = bool(
+                fundamentals.get("revenue_growth") and fundamentals["revenue_growth"] > 0 and
+                fundamentals.get("earnings_growth") and fundamentals["earnings_growth"] > 0 and
+                len(convergence) > 0
+            )
 
         return jsonify({
             "symbol":       ticker.upper(),

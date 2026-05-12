@@ -128,3 +128,12 @@ class Preference(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(50), unique=True, nullable=False)
     value = db.Column(db.Text)
+
+
+class FMPCache(db.Model):
+    __tablename__ = "fmp_cache"
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(10), nullable=False, index=True)
+    endpoint = db.Column(db.String(50), nullable=False)
+    data = db.Column(db.Text)
+    cached_at = db.Column(db.DateTime, default=datetime.utcnow)

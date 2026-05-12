@@ -17,6 +17,24 @@ def compute_rsi(closes: pd.Series, period: int = 14) -> float:
     return float(val) if not pd.isna(val) else 50.0
 
 
+def compute_rvol(volumes: pd.Series, period: int = 20) -> float:
+    """Relative volume: latest bar vs N-bar average."""
+    if len(volumes) < period:
+        return 1.0
+    avg = float(volumes.tail(period).mean())
+    return float(volumes.iloc[-1]) / avg if avg > 0 else 1.0
+
+
+def rvol_tier(rvol: float) -> str:
+    if rvol < 0.75:
+        return "Low"
+    if rvol < 1.25:
+        return "Normal"
+    if rvol < 2.0:
+        return "Elevated"
+    return "In Play"
+
+
 def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | None:
     """
     Returns signal dict or None if insufficient data.
@@ -33,6 +51,10 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
     prev_price = float(closes.iloc[-2]) if len(closes) > 1 else current_price
     price_up = current_price >= prev_price
 
+    rvol = compute_rvol(volumes)
+    rvol_label = rvol_tier(rvol)
+    low_volume = rvol < 0.75
+
     all_signals = []
     total_weight = 0.0
     weighted_score = 0.0
@@ -44,24 +66,17 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
         ma50 = float(closes.tail(50).mean())
 
         if len(closes) >= 200:
-            # Real Golden/Death Cross: MA50 vs MA200
             ma200 = float(closes.tail(200).mean())
             is_bull = ma50 > ma200
-            # Detect a recent crossover (within last 20 bars ≈ ~4 weeks)
-            recently_crossed = False
-            try:
-                ma50_s  = closes.rolling(50,  min_periods=50).mean()
-                ma200_s = closes.rolling(200, min_periods=200).mean()
-                for back in range(1, 21):
-                    if len(closes) > back + 1:
-                        if (float(ma50_s.iloc[-back-1]) < float(ma200_s.iloc[-back-1]) and
-                                float(ma50_s.iloc[-back]) >= float(ma200_s.iloc[-back])):
-                            recently_crossed = True; break
-                        if (float(ma50_s.iloc[-back-1]) > float(ma200_s.iloc[-back-1]) and
-                                float(ma50_s.iloc[-back]) <= float(ma200_s.iloc[-back])):
-                            recently_crossed = True; break
-            except Exception:
-                pass
+            ma50_s  = closes.rolling(50,  min_periods=50).mean()
+            ma200_s = closes.rolling(200, min_periods=200).mean()
+            # Vectorized event detection: crossover in last 20 bars
+            golden_s = (ma50_s.shift(1) < ma200_s.shift(1)) & (ma50_s >= ma200_s)
+            death_s  = (ma50_s.shift(1) > ma200_s.shift(1)) & (ma50_s <= ma200_s)
+            recently_golden = bool(golden_s.iloc[-20:].any())
+            recently_death  = bool(death_s.iloc[-20:].any())
+            recently_crossed = recently_golden or recently_death
+
             score = 1.0 if is_bull else 0.0
             if recently_crossed:
                 cross_tag = "☀ Golden Cross" if is_bull else "☽ Death Cross"
@@ -73,11 +88,10 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
                 "score": score,
                 "weight": w_ma,
                 "reason": f"MA50 ${ma50:.2f} {'>' if is_bull else '<'} MA200 ${ma200:.2f} — {cross_tag}",
-                "golden_cross": recently_crossed and is_bull,
-                "death_cross":  recently_crossed and not is_bull,
+                "golden_cross": recently_golden,
+                "death_cross":  recently_death,
             })
         else:
-            # Not enough data for MA200; use MA20 vs MA50 (no "Golden Cross" label)
             is_bull = ma20 > ma50
             score = 1.0 if is_bull else 0.0
             all_signals.append({
@@ -114,6 +128,9 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
             direction = "neutral"
             reason = f"Volume {vol_ratio:.1f}× 30d avg — no spike ({threshold}× threshold)"
 
+        if low_volume:
+            reason += f" · RVOL {rvol:.2f}× — low volume, less reliable"
+
         all_signals.append({
             "name": "Volume",
             "direction": direction,
@@ -121,6 +138,7 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
             "weight": w_vol,
             "reason": reason,
             "vol_ratio": round(vol_ratio, 2),
+            "rvol": round(rvol, 2),
         })
         total_weight += w_vol
         weighted_score += w_vol * score
@@ -235,10 +253,69 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
     except Exception:
         pass
 
+    # ── 6. Anticipatory Crossover ────────────────────────────────────
+    # Δ(t) = MA200 - MA50; V(t) = Δ(t) - Δ(t-1); T_cross = |Δ/V|
+    try:
+        if len(closes) >= 202:
+            ma50_s  = closes.rolling(50,  min_periods=50).mean()
+            ma200_s = closes.rolling(200, min_periods=200).mean()
+            if not any(pd.isna(ma50_s.iloc[-i]) or pd.isna(ma200_s.iloc[-i]) for i in (1, 2)):
+                delta_t  = float(ma200_s.iloc[-1]) - float(ma50_s.iloc[-1])
+                delta_t1 = float(ma200_s.iloc[-2]) - float(ma50_s.iloc[-2])
+                velocity = delta_t - delta_t1   # negative → gap closing
+
+                if velocity != 0:
+                    t_cross = abs(delta_t / velocity)
+
+                    if t_cross <= 10:
+                        days_est = max(1, int(round(t_cross)))
+
+                        # Golden cross approaching: MA50 below MA200 (delta>0), gap shrinking (V<0)
+                        if delta_t > 0 and velocity < 0:
+                            high_conf = rvol > 1.5
+                            ant_score = 0.82 if high_conf else 0.68
+                            ant_weight = 0.12
+                            reason = f"MA50→MA200 gap closing, Golden Cross est. ~{days_est}d"
+                            reason += f" (RVOL {rvol:.1f}×{'✓' if high_conf else ' — low conviction'})"
+                            all_signals.append({
+                                "name": "Anticipatory Crossover",
+                                "direction": "bull",
+                                "score": ant_score,
+                                "weight": ant_weight,
+                                "reason": reason,
+                                "days_to_cross": days_est,
+                                "cross_type": "golden",
+                            })
+                            total_weight   += ant_weight
+                            weighted_score += ant_weight * ant_score
+
+                        # Death cross approaching: MA50 above MA200 (delta<0), gap shrinking (V>0)
+                        elif delta_t < 0 and velocity > 0:
+                            ant_score = 0.22
+                            ant_weight = 0.12
+                            reason = f"MA50 dropping toward MA200, Death Cross est. ~{days_est}d (RVOL {rvol:.1f}×)"
+                            all_signals.append({
+                                "name": "Anticipatory Crossover",
+                                "direction": "bear",
+                                "score": ant_score,
+                                "weight": ant_weight,
+                                "reason": reason,
+                                "days_to_cross": days_est,
+                                "cross_type": "death",
+                            })
+                            total_weight   += ant_weight
+                            weighted_score += ant_weight * ant_score
+    except Exception:
+        pass
+
     if total_weight == 0:
         return None
 
     confidence = round(weighted_score / total_weight * 100)
+
+    # Dampen confidence toward 50 when volume is suspiciously low
+    if low_volume:
+        confidence = round(confidence + (50 - confidence) * 0.20)
 
     # ── Thresholds by risk tolerance ──────────────────────────────────
     risk = profile.get("risk_tolerance", "Moderate")
@@ -256,19 +333,20 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
     else:
         signal = "HOLD"
 
-    # Build human-readable reasoning
     active_signals = [s["name"] for s in all_signals if s["direction"] != "neutral"]
     reasoning = " + ".join(active_signals) if active_signals else "Mixed signals"
 
     return {
-        "symbol": symbol,
-        "signal": signal,
-        "confidence": confidence,
-        "reasoning": reasoning,
-        "signals": all_signals,
-        "price": current_price,
-        "thresholds": t,
+        "symbol":       symbol,
+        "signal":       signal,
+        "confidence":   confidence,
+        "reasoning":    reasoning,
+        "signals":      all_signals,
+        "price":        current_price,
+        "thresholds":   t,
         "risk_tolerance": risk,
+        "rvol":         round(rvol, 2),
+        "rvol_tier":    rvol_label,
     }
 
 

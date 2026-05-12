@@ -417,6 +417,7 @@ function renderCompact(el) {
           <div class="card-stat"><div class="stat-label">MA20</div><div class="stat-val ${q.above_ma20 ? 'bullish' : 'bearish'}">${q.ma20 ? '$' + q.ma20.toFixed(2) : '—'}</div></div>
           <div class="card-stat"><div class="stat-label">MA50</div><div class="stat-val ${q.above_ma50 ? 'bullish' : 'bearish'}">${q.ma50 ? '$' + q.ma50.toFixed(2) : '—'}</div></div>
         </div>
+        ${q.rvol != null ? `<div class="card-rvol-row"><span class="rvol-badge rvol-${(q.rvol_tier||'normal').toLowerCase().replace(' ','-')}">RVOL ${q.rvol.toFixed(2)}× ${q.rvol_tier||''}</span></div>` : ''}
         <div class="card-bottom">
           <div class="card-signals">
             ${q.ma20 ? `<span class="signal-badge ${q.above_ma20 ? 'signal-bull' : 'signal-bear'}">${q.above_ma20 ? '▲' : '▼'} MA20</span>` : ''}
@@ -447,6 +448,7 @@ function renderExpanded(el) {
         <td class="${dir}">${q.change >= 0 ? '+' : ''}$${q.change.toFixed(2)}</td>
         <td class="${dir}">${q.pct_change >= 0 ? '+' : ''}${q.pct_change.toFixed(2)}%</td>
         <td style="color:var(--text2)">${q.volume}</td>
+        <td>${q.rvol != null ? `<span class="rvol-badge rvol-${(q.rvol_tier||'normal').toLowerCase().replace(' ','-')}">${q.rvol.toFixed(2)}×</span>` : '—'}</td>
         <td style="color:${q.rsi < 30 ? 'var(--green)' : q.rsi > 70 ? 'var(--red)' : 'var(--text2)'}">${q.rsi ? q.rsi.toFixed(0) : '—'}</td>
         <td class="${q.above_ma20 ? 'up' : 'down'}">${q.ma20 ? '$' + q.ma20.toFixed(2) : '—'}</td>
         <td class="${q.above_ma50 ? 'up' : 'down'}">${q.ma50 ? '$' + q.ma50.toFixed(2) : '—'}</td>
@@ -462,7 +464,7 @@ function renderExpanded(el) {
         </td>
       </tr>`;
   }).join('');
-  el.innerHTML = `<table class="expanded-table"><thead><tr><th></th><th>TICKER</th><th>PRICE</th><th>CHG</th><th>% CHG</th><th>VOLUME</th><th>RSI</th><th>MA20</th><th>MA50</th><th>SIGNALS</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  el.innerHTML = `<table class="expanded-table"><thead><tr><th></th><th>TICKER</th><th>PRICE</th><th>CHG</th><th>% CHG</th><th>VOLUME</th><th>RVOL</th><th>RSI</th><th>MA20</th><th>MA50</th><th>SIGNALS</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1455,6 +1457,54 @@ function renderPlotlyChart(data) {
     showlegend: false,
   });
 
+  // ── MA50−MA200 Oscillator panel ───────────────────────────────
+  const hasMa200 = data.ma200 && data.ma200.some(v => v !== null);
+  if (hasMa200) {
+    const osc = data.dates.map((_, i) => {
+      const v50 = data.ma50[i], v200 = data.ma200[i];
+      if (v50 == null || v200 == null) return null;
+      return parseFloat((v50 - v200).toFixed(4));
+    });
+    const oscColors = osc.map((v, i) => {
+      if (v == null) return 'rgba(0,0,0,0)';
+      const prev = i > 0 ? osc[i - 1] : v;
+      return (prev == null || v >= prev)
+        ? 'rgba(0,230,118,0.60)'    // rising → converging (bullish)
+        : 'rgba(255,82,82,0.60)';   // falling → diverging (bearish)
+    });
+    traces.push({
+      type: 'bar',
+      x: data.dates,
+      y: osc,
+      name: 'MA50−MA200',
+      marker: { color: oscColors },
+      xaxis: 'x', yaxis: 'y3',
+      showlegend: false,
+      hovertemplate: 'MA50−MA200: %{y:.2f}<extra></extra>',
+    });
+    // Zero crossover scatter markers
+    const cxDates = [], cxVals = [];
+    for (let i = 1; i < osc.length; i++) {
+      if (osc[i - 1] != null && osc[i] != null) {
+        if ((osc[i - 1] < 0 && osc[i] >= 0) || (osc[i - 1] > 0 && osc[i] <= 0)) {
+          cxDates.push(data.dates[i]);
+          cxVals.push(0);
+        }
+      }
+    }
+    if (cxDates.length > 0) {
+      traces.push({
+        type: 'scatter', mode: 'markers',
+        x: cxDates, y: cxVals,
+        name: 'Crossover',
+        marker: { color: '#ffd740', size: 7, symbol: 'diamond' },
+        xaxis: 'x', yaxis: 'y3',
+        showlegend: false,
+        hovertemplate: 'MA Crossover<extra></extra>',
+      });
+    }
+  }
+
   // ── Crossover annotations ─────────────────────────────────────
   const plotAnnotations = (data.annotations || []).map(a => ({
     x: a.date, y: a.price,
@@ -1503,7 +1553,7 @@ function renderPlotlyChart(data) {
       showgrid: true,
     },
     yaxis: {
-      domain: [0.22, 1],
+      domain: hasMa200 ? [0.38, 1.0] : [0.22, 1.0],
       gridcolor: '#1e1e26',
       color: '#5a5a6e',
       side: 'right',
@@ -1511,11 +1561,22 @@ function renderPlotlyChart(data) {
       showgrid: true,
     },
     yaxis2: {
-      domain: [0, 0.17],
+      domain: hasMa200 ? [0.20, 0.35] : [0, 0.17],
       gridcolor: '#1e1e26',
       color: '#5a5a6e',
       side: 'right',
       showgrid: false,
+    },
+    yaxis3: {
+      domain: [0, 0.17],
+      gridcolor: '#1e1e26',
+      color: '#5a5a6e',
+      side: 'right',
+      zeroline: true,
+      zerolinecolor: '#363645',
+      zerolinewidth: 1,
+      showgrid: false,
+      title: { text: 'OSC', font: { size: 9, color: '#5a5a6e' } },
     },
     legend: {
       x: 0.01, y: 0.97,
@@ -1550,7 +1611,12 @@ function toggleMA(maKey, checkbox) {
 }
 
 function resetChartZoom() {
-  Plotly.relayout('plotly-chart', { 'xaxis.autorange': true, 'yaxis.autorange': true, 'yaxis2.autorange': true });
+  Plotly.relayout('plotly-chart', {
+    'xaxis.autorange': true,
+    'yaxis.autorange': true,
+    'yaxis2.autorange': true,
+    'yaxis3.autorange': true,
+  });
 }
 
 function renderFundamentals(data) {
@@ -1573,6 +1639,13 @@ function renderFundamentals(data) {
     if (v == null) return '';
     return (invert ? v < 0 : v > 0) ? 'up' : 'down';
   };
+  const passFail = (v, unknownText = '—') => {
+    if (v === true)  return '<span class="fmp-pass">✓</span>';
+    if (v === false) return '<span class="fmp-fail">✗</span>';
+    return `<span style="color:var(--text3)">${unknownText}</span>`;
+  };
+
+  const isFmp = f.data_source === 'fmp';
 
   const stats = [
     { label: 'REVENUE GROWTH',  val: fmtPct(f.revenue_growth),  cls: colorCls(f.revenue_growth)  },
@@ -1587,19 +1660,34 @@ function renderFundamentals(data) {
     { label: 'SECTOR',          val: f.sector || '—',           cls: '' },
   ];
 
+  const fmpScreenHtml = isFmp ? `
+    <div class="fmp-screen-row">
+      <div class="fmp-screen-label">FMP FUNDAMENTAL SCREEN</div>
+      <div class="fmp-screen-checks">
+        <span class="fmp-check-item">${passFail(f.revenue_3q_growth)} Rev 3Q growth</span>
+        <span class="fmp-check-item">${passFail(f.earnings_3q_growth)} EPS 3Q growth</span>
+        <span class="fmp-check-item">${passFail(f.fcf_positive)} FCF positive</span>
+      </div>
+    </div>` : '';
+
   const strongBuyHtml = data.strong_buy
-    ? `<div class="strong-buy-flag">★ STRONG BUY — Positive revenue &amp; earnings growth with MA convergence</div>`
+    ? `<div class="strong-buy-flag">★ STRONG BUY — Fundamental screen passed with MA convergence</div>`
     : '';
 
   const cvgHtml = cvg.length > 0
     ? `<div class="convergence-row">${cvg.map(c => `<span class="convergence-badge">⟳ ${c.label}</span>`).join('')}</div>`
     : '';
 
+  const srcBadge = isFmp
+    ? `<span class="data-src-badge src-fmp">FMP</span>`
+    : `<span class="data-src-badge src-yf">yfinance</span>`;
+
   el.innerHTML = `
     ${strongBuyHtml}
+    ${fmpScreenHtml}
     ${cvgHtml}
     <div class="fundamentals-header" onclick="toggleFundamentals()">
-      <div class="fundamentals-title">FUNDAMENTALS</div>
+      <div class="fundamentals-title">FUNDAMENTALS ${srcBadge}</div>
       <div class="fundamentals-chevron" id="fund-chevron">▼</div>
     </div>
     <div class="fundamentals-body" id="fundamentals-body">

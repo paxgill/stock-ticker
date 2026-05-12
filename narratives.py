@@ -253,6 +253,20 @@ def generate_trade_description(analysis: dict) -> str:
                     "Moving averages are converging, suggesting a potential trend change is building."
                 )
 
+        elif name == "Anticipatory Crossover":
+            days = s.get("days_to_cross")
+            cross_type = s.get("cross_type", "golden")
+            if cross_type == "golden" and days:
+                detail_parts.append(
+                    f"The 50-day and 200-day moving averages are converging rapidly, "
+                    f"with a potential Golden Cross estimated in approximately {days} trading days."
+                )
+            elif cross_type == "death" and days:
+                detail_parts.append(
+                    f"The 50-day moving average is falling toward the 200-day, "
+                    f"with a potential Death Cross estimated in approximately {days} trading days."
+                )
+
         elif name == "Momentum":
             if mom_pct is not None:
                 if direction == "bull":
