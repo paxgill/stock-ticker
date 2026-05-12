@@ -227,9 +227,9 @@ def news_sentiment(text: str) -> str:
     words = set(text.lower().split())
     bull = len(words & _BULL)
     bear = len(words & _BEAR)
-    if bull > bear:  return "Positive"
-    if bear > bull:  return "Negative"
-    return "Neutral"
+    if bull > bear:  return "bull"
+    if bear > bull:  return "bear"
+    return "neutral"
 
 
 def _fetch_earnings_date(symbol: str) -> str | None:
@@ -943,17 +943,12 @@ def ticker_details():
             high52 = getattr(fi, "fifty_two_week_high", None)
             low52  = getattr(fi, "fifty_two_week_low",  None)
 
-            # Short interest — cache 4 h (involves .info call)
+            # Short interest — read from cache only (never block on t.info here;
+            # t.info has no timeout and will stall Flask's single-threaded dev server)
             short_pct = None
             cached_si = _fmp_cache_get(sym, "si_ext", ttl_hours=4)
             if cached_si is not None:
                 short_pct = cached_si.get("short_pct")
-            else:
-                try:
-                    short_pct = t.info.get("shortPercentOfFloat")
-                    _fmp_cache_set(sym, "si_ext", {"short_pct": short_pct})
-                except Exception:
-                    pass
 
             # Earnings date
             earn_date    = _fetch_earnings_date(sym)
@@ -964,15 +959,16 @@ def ticker_details():
                     days_to_earn = None   # past
 
             results[sym] = {
-                "pre_price":    round(float(pre_price),  2) if pre_price  else None,
-                "pre_pct":      ext_pct(pre_price),
-                "post_price":   round(float(post_price), 2) if post_price else None,
-                "post_pct":     ext_pct(post_price),
-                "high_52w":     round(float(high52), 2) if high52 else None,
-                "low_52w":      round(float(low52),  2) if low52  else None,
-                "short_pct":    round(float(short_pct) * 100, 1) if short_pct else None,
-                "earn_date":    earn_date,
-                "days_to_earn": days_to_earn,
+                "pre_price":      round(float(pre_price),  2) if pre_price  else None,
+                "pre_pct":        ext_pct(pre_price),
+                "post_price":     round(float(post_price), 2) if post_price else None,
+                "post_pct":       ext_pct(post_price),
+                "high_52w":       round(float(high52), 2) if high52 else None,
+                "low_52w":        round(float(low52),  2) if low52  else None,
+                # short_interest sent as 0-1 decimal (e.g. 0.15 = 15%)
+                "short_interest": round(float(short_pct), 4) if short_pct else None,
+                "earn_date":      earn_date,
+                "days_to_earn":   days_to_earn,
             }
         except Exception:
             results[sym] = {}
@@ -1011,12 +1007,14 @@ def sector_heatmap():
 @app.route("/api/news/<ticker>")
 def ticker_news(ticker):
     if not FINNHUB_API_KEY:
-        return jsonify([])
+        return jsonify({"no_key": True, "articles": []})
 
     sym = ticker.upper()
     cached = _fmp_cache_get(sym, "finnhub_news", ttl_hours=4)
     if cached is not None:
-        return jsonify(cached)
+        # Cached value is the articles list; wrap it
+        articles = cached if isinstance(cached, list) else cached.get("articles", [])
+        return jsonify({"articles": articles})
 
     try:
         today     = date.today()
@@ -1031,18 +1029,27 @@ def ticker_news(ticker):
             return jsonify([])
 
         articles = resp.json() or []
+        now_ts   = int(datetime.utcnow().timestamp())
         results  = []
         for art in articles[:5]:
             headline = art.get("headline", "")
+            art_ts   = int(art.get("datetime", 0) or 0)
+            delta    = now_ts - art_ts if art_ts else 0
+            if delta < 3600:
+                time_ago = f"{max(1, delta // 60)}m ago"
+            elif delta < 86400:
+                time_ago = f"{delta // 3600}h ago"
+            else:
+                time_ago = f"{delta // 86400}d ago"
             results.append({
                 "headline":  headline,
                 "source":    art.get("source", ""),
                 "url":       art.get("url", ""),
-                "datetime":  art.get("datetime", 0),
+                "time_ago":  time_ago,
                 "sentiment": news_sentiment(headline),
             })
         _fmp_cache_set(sym, "finnhub_news", results)
-        return jsonify(results)
+        return jsonify({"articles": results})
     except Exception:
         return jsonify([])
 
@@ -1080,4 +1087,8 @@ def correlation_matrix():
 
 
 if __name__ == "__main__":
-	app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        threaded=True,   # allow concurrent requests; prevents t.info blocking /api/quote
+    )

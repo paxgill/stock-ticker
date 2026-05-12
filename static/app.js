@@ -1891,12 +1891,14 @@ async function renderHeatmapTab() {
     const data = await api.get('/api/heatmap');
     if (data.error) throw new Error(data.error);
 
-    const etfs   = Object.keys(data);
+    // Backend returns: { sectors: [{symbol, name, pct, price}, ...], n_up, n_dn, generated_at }
+    const sectors = data.sectors || [];
+    if (sectors.length === 0) throw new Error('No sector data returned');
 
-    // Guard every value: .pct/.price may be null/undefined if a sector ETF failed to fetch
-    const pcts   = etfs.map(s => (data[s]?.pct   ?? 0));   // default missing % to 0
-    const prices = etfs.map(s => (data[s]?.price  ?? 0));
-    const names  = etfs.map(s => (data[s]?.name   || s));
+    const etfs   = sectors.map(s => s.symbol);
+    const pcts   = sectors.map(s => s.pct   ?? 0);
+    const prices = sectors.map(s => s.price ?? 0);
+    const names  = sectors.map(s => s.name  || s.symbol);
 
     // Helper: format a % value that may be 0 (defaulted) or a real number
     const fmtPct = (p) => `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
@@ -1994,9 +1996,11 @@ async function renderCorrelationTab() {
     const data = await api.post('/api/correlation', { tickers: S.watchlist.map(t => t.symbol) });
     if (data.error) throw new Error(data.error);
 
-    const symbols = data.symbols;
+    // Backend returns: { tickers: [...], matrix: [[...], ...], generated_at }
+    const symbols = data.tickers;   // was data.symbols — wrong key
     const matrix  = data.matrix;
-    const n       = symbols.length;
+    if (!symbols || !symbols.length) throw new Error('No correlation data returned');
+    const n = symbols.length;
 
     // Text labels for each cell — guard against null/undefined from API
     const textMatrix = matrix.map((row, ri) =>
@@ -2061,10 +2065,12 @@ async function loadChartNews(symbol) {
   try {
     const data = await api.get(`/api/news/${symbol}`);
 
-    // Backend returns {no_key: true} when Finnhub key is missing — silently skip
-    if (!data || data.no_key || !data.articles || data.articles.length === 0) return;
+    // Backend returns: { articles: [...] }  OR  { no_key: true, articles: [] }
+    if (!data || data.no_key) return;
+    const rawArticles = data.articles || [];
+    if (rawArticles.length === 0) return;
 
-    const articles = data.articles.map(a => {
+    const articleHtml = rawArticles.map(a => {
       const sentClass = a.sentiment === 'bull' ? 'news-bull'
                       : a.sentiment === 'bear' ? 'news-bear'
                       : 'news-neutral';
@@ -2079,7 +2085,7 @@ async function loadChartNews(symbol) {
             <div class="news-headline">${a.headline}</div>
             <div class="news-meta">
               <span class="news-source">${a.source}</span>
-              <span>${a.time_ago}</span>
+              <span>${a.time_ago || ''}</span>
               <span class="news-sentiment ${sentClass}">${sentLabel}</span>
             </div>
           </a>
@@ -2091,7 +2097,7 @@ async function loadChartNews(symbol) {
         <span>RECENT NEWS</span>
         <span>via Finnhub</span>
       </div>
-      <div class="news-articles">${articles}</div>`;
+      <div class="news-articles">${articleHtml}</div>`;
 
   } catch (e) {
     // Silently fail — news is supplementary
