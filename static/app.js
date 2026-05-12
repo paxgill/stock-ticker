@@ -1476,14 +1476,30 @@ function renderPlotlyChart(data) {
     paper_bgcolor: '#0a0a0b',
     plot_bgcolor:  '#111114',
     font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
-    margin: { l: 10, r: 70, t: 10, b: 40 },
+    margin: { l: 10, r: 70, t: 8, b: 30 },
+    dragmode: 'zoom',
     xaxis: {
-      type: 'category',
+      type: 'date',
+      rangebreaks: [{ bounds: ['sat', 'mon'] }],
       rangeslider: { visible: false },
+      rangeselector: {
+        buttons: [
+          { count: 1,  label: '1M', step: 'month', stepmode: 'backward' },
+          { count: 3,  label: '3M', step: 'month', stepmode: 'backward' },
+          { count: 6,  label: '6M', step: 'month', stepmode: 'backward' },
+          { count: 1,  label: 'YTD', step: 'year', stepmode: 'todate'   },
+          { count: 1,  label: '1Y', step: 'year',  stepmode: 'backward' },
+          { step: 'all', label: 'All' },
+        ],
+        bgcolor:      '#18181d',
+        activecolor:  '#00d4aa',
+        bordercolor:  '#2a2a35',
+        borderwidth:  1,
+        font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
+        x: 0, xanchor: 'left', y: 1.04,
+      },
       gridcolor: '#1e1e26',
       color: '#5a5a6e',
-      tickangle: -30,
-      nticks: 10,
       showgrid: true,
     },
     yaxis: {
@@ -1502,7 +1518,7 @@ function renderPlotlyChart(data) {
       showgrid: false,
     },
     legend: {
-      x: 0.01, y: 0.99,
+      x: 0.01, y: 0.97,
       bgcolor: 'rgba(10,10,11,0.75)',
       bordercolor: '#2a2a35',
       borderwidth: 1,
@@ -1512,6 +1528,7 @@ function renderPlotlyChart(data) {
     hovermode: 'x unified',
     hoverlabel: { bgcolor: '#18181d', bordercolor: '#363645',
                   font: { family: 'JetBrains Mono, monospace', size: 11 } },
+    selectdirection: 'h',
   };
 
   Plotly.newPlot('plotly-chart', traces, layout, {
@@ -1530,6 +1547,10 @@ function toggleMA(maKey, checkbox) {
   const idx = div.data.findIndex(t => t.name === name);
   if (idx < 0) return;
   Plotly.restyle('plotly-chart', { visible: checkbox.checked ? true : 'legendonly' }, [idx]);
+}
+
+function resetChartZoom() {
+  Plotly.relayout('plotly-chart', { 'xaxis.autorange': true, 'yaxis.autorange': true, 'yaxis2.autorange': true });
 }
 
 function renderFundamentals(data) {

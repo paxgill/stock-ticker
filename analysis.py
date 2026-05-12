@@ -47,12 +47,12 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
             # Real Golden/Death Cross: MA50 vs MA200
             ma200 = float(closes.tail(200).mean())
             is_bull = ma50 > ma200
-            # Detect a recent crossover (within last 3 bars)
+            # Detect a recent crossover (within last 20 bars ≈ ~4 weeks)
             recently_crossed = False
             try:
                 ma50_s  = closes.rolling(50,  min_periods=50).mean()
                 ma200_s = closes.rolling(200, min_periods=200).mean()
-                for back in range(1, 4):
+                for back in range(1, 21):
                     if len(closes) > back + 1:
                         if (float(ma50_s.iloc[-back-1]) < float(ma200_s.iloc[-back-1]) and
                                 float(ma50_s.iloc[-back]) >= float(ma200_s.iloc[-back])):
@@ -63,14 +63,18 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
             except Exception:
                 pass
             score = 1.0 if is_bull else 0.0
-            cross_tag = "Golden Cross" if is_bull else "Death Cross"
-            recent_tag = " ✓ Recent crossover" if recently_crossed else ""
+            if recently_crossed:
+                cross_tag = "☀ Golden Cross" if is_bull else "☽ Death Cross"
+            else:
+                cross_tag = "Bullish trend (MA50 > MA200)" if is_bull else "Bearish trend (MA50 < MA200)"
             all_signals.append({
                 "name": "MA Crossover",
                 "direction": "bull" if is_bull else "bear",
                 "score": score,
                 "weight": w_ma,
-                "reason": f"MA50 ${ma50:.2f} {'>' if is_bull else '<'} MA200 ${ma200:.2f} — {cross_tag}{recent_tag}",
+                "reason": f"MA50 ${ma50:.2f} {'>' if is_bull else '<'} MA200 ${ma200:.2f} — {cross_tag}",
+                "golden_cross": recently_crossed and is_bull,
+                "death_cross":  recently_crossed and not is_bull,
             })
         else:
             # Not enough data for MA200; use MA20 vs MA50 (no "Golden Cross" label)
