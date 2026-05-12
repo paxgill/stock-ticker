@@ -1892,10 +1892,16 @@ async function renderHeatmapTab() {
     if (data.error) throw new Error(data.error);
 
     const etfs   = Object.keys(data);
-    const pcts   = etfs.map(s => data[s].pct);
-    const prices = etfs.map(s => data[s].price);
-    const names  = etfs.map(s => data[s].name || s);
-    const maxAbs = Math.max(...pcts.map(Math.abs), 0.01);
+
+    // Guard every value: .pct/.price may be null/undefined if a sector ETF failed to fetch
+    const pcts   = etfs.map(s => (data[s]?.pct   ?? 0));   // default missing % to 0
+    const prices = etfs.map(s => (data[s]?.price  ?? 0));
+    const names  = etfs.map(s => (data[s]?.name   || s));
+
+    // Helper: format a % value that may be 0 (defaulted) or a real number
+    const fmtPct = (p) => `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
+
+    const maxAbs = Math.max(...pcts.map(p => Math.abs(p)), 0.01);
 
     const bgColors = pcts.map(p => {
       const norm = p / maxAbs;
@@ -1904,24 +1910,20 @@ async function renderHeatmapTab() {
         : `rgba(255,82,82,${Math.min(0.95, 0.18 + 0.55 * Math.abs(norm)).toFixed(2)})`;
     });
 
-    // Labels: "ETF\nSector Name" + % change as hover text
-    const labels  = etfs.map((sym, i) => `${sym}  ${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%<br><span style="font-size:9px">${names[i]}</span>`);
-    const textArr = pcts.map((p, i) => `${etfs[i]}\n${p >= 0 ? '+' : ''}${p.toFixed(2)}%`);
-
     const trace = {
       type: 'treemap',
       labels: etfs,
       parents: etfs.map(() => ''),
       values: etfs.map(() => 1),
       text: etfs.map((sym, i) =>
-        `${sym}<br>${names[i]}<br><b>${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%</b>`
+        `${sym}<br>${names[i]}<br><b>${fmtPct(pcts[i])}</b>`
       ),
       textinfo: 'text',
       hovertemplate: '<b>%{label}</b> — %{customdata[1]}<br>Price: $%{customdata[0]:.2f}<br>Change: %{customdata[2]}<extra></extra>',
       customdata: etfs.map((sym, i) => [
         prices[i],
         names[i],
-        `${pcts[i] >= 0 ? '+' : ''}${pcts[i].toFixed(2)}%`,
+        fmtPct(pcts[i]),
       ]),
       marker: {
         colors: bgColors,
@@ -1941,18 +1943,18 @@ async function renderHeatmapTab() {
     plotEl.style.display = '';
     Plotly.newPlot(plotEl, [trace], layout, { responsive: true, displayModeBar: false });
 
-    // Summary line
+    // Summary line — guard bestI/worstI in case all pcts are 0
     const up     = pcts.filter(p => p > 0).length;
     const dn     = pcts.filter(p => p < 0).length;
-    const avg    = (pcts.reduce((a, b) => a + b, 0) / pcts.length).toFixed(2);
+    const avg    = pcts.length ? (pcts.reduce((a, b) => a + b, 0) / pcts.length) : 0;
     const bestI  = pcts.indexOf(Math.max(...pcts));
     const worstI = pcts.indexOf(Math.min(...pcts));
     const now    = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     if (summaryEl) {
       summaryEl.innerHTML =
-        `${up} up, ${dn} down &nbsp;·&nbsp; Avg ${avg >= 0 ? '+' : ''}${avg}% &nbsp;·&nbsp; ` +
-        `<span class="up">Best: ${etfs[bestI]} +${pcts[bestI].toFixed(2)}%</span> &nbsp;·&nbsp; ` +
-        `<span class="down">Worst: ${etfs[worstI]} ${pcts[worstI].toFixed(2)}%</span> &nbsp;·&nbsp; ` +
+        `${up} up, ${dn} down &nbsp;·&nbsp; Avg ${fmtPct(avg)} &nbsp;·&nbsp; ` +
+        `<span class="up">Best: ${etfs[bestI] ?? '—'} ${fmtPct(pcts[bestI] ?? 0)}</span> &nbsp;·&nbsp; ` +
+        `<span class="down">Worst: ${etfs[worstI] ?? '—'} ${fmtPct(pcts[worstI] ?? 0)}</span> &nbsp;·&nbsp; ` +
         `<span style="color:var(--text3)">Updated ${now}</span>`;
     }
     const updEl = document.getElementById('heatmap-updated');
@@ -1996,9 +1998,9 @@ async function renderCorrelationTab() {
     const matrix  = data.matrix;
     const n       = symbols.length;
 
-    // Text labels for each cell
+    // Text labels for each cell — guard against null/undefined from API
     const textMatrix = matrix.map((row, ri) =>
-      row.map((v, ci) => (ri === ci ? '—' : v.toFixed(2)))
+      row.map((v, ci) => (ri === ci ? '—' : v != null ? v.toFixed(2) : '—'))
     );
 
     const trace = {
