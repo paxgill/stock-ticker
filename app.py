@@ -35,6 +35,13 @@ db.init_app(app)
 
 with app.app_context():
     db.create_all()
+    # Prune FMP cache rows older than 90 days to prevent unbounded growth
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=90)
+        FMPCache.query.filter(FMPCache.cached_at < cutoff).delete()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -290,14 +297,12 @@ def index():
 def validate_ticker(ticker):
     try:
         t = yf.Ticker(ticker.upper())
-        info = t.fast_info
-        price = info.last_price
+        fi = t.fast_info            # fast_info has no blocking HTTP call
+        price = fi.last_price
         if not price or price == 0:
             return jsonify({"valid": False})
-        try:
-            long_name = t.info.get("longName") or t.info.get("shortName") or ticker.upper()
-        except Exception:
-            long_name = ticker.upper()
+        # Never call t.info here — it has no timeout and can block 30+ seconds
+        long_name = ticker.upper()
         return jsonify({"valid": True, "name": long_name, "price": round(price, 2)})
     except Exception as e:
         return jsonify({"valid": False, "error": str(e)})
@@ -330,8 +335,9 @@ def get_quotes():
             rsi = compute_rsi(closes) if len(closes) >= 15 else None
 
             vol = float(volumes.iloc[-1])
-            avg_vol30 = float(volumes.tail(30).mean()) if len(volumes) >= 30 else vol
-            vol_ratio = round(vol / avg_vol30, 2) if avg_vol30 > 0 else 1.0
+            # 20-bar average — matches compute_rvol() baseline in analysis.py
+            avg_vol20 = float(volumes.tail(20).mean()) if len(volumes) >= 20 else vol
+            vol_ratio = round(vol / avg_vol20, 2) if avg_vol20 > 0 else 1.0
 
             rvol = round(compute_rvol(volumes), 2)
             rvol_label = rvol_tier(rvol)
@@ -423,6 +429,10 @@ def get_profiles():
 @app.route("/api/profiles", methods=["POST"])
 def create_profile():
     d = request.json or {}
+    rsi_ob = float(d.get("rsi_overbought", 70.0))
+    rsi_os = float(d.get("rsi_oversold",  30.0))
+    if rsi_os >= rsi_ob:
+        return jsonify({"error": "RSI Oversold must be less than RSI Overbought"}), 400
     profile = AnalysisProfile(
         name=d.get("name", "New Profile"),
         risk_tolerance=d.get("risk_tolerance", "Moderate"),
@@ -432,8 +442,8 @@ def create_profile():
         rsi_weight=d.get("rsi_weight", 0.25),
         momentum_weight=d.get("momentum_weight", 0.25),
         volume_spike_threshold=d.get("volume_spike_threshold", 1.5),
-        rsi_overbought=d.get("rsi_overbought", 70.0),
-        rsi_oversold=d.get("rsi_oversold", 30.0),
+        rsi_overbought=rsi_ob,
+        rsi_oversold=rsi_os,
         momentum_days=d.get("momentum_days", 10),
         max_trades_per_day=d.get("max_trades_per_day", 3),
         is_active=d.get("is_active", False),
@@ -449,6 +459,11 @@ def create_profile():
 def update_profile(pid):
     profile = AnalysisProfile.query.get_or_404(pid)
     d = request.json or {}
+    # Validate RSI thresholds when both are present or one is being updated
+    rsi_ob = float(d.get("rsi_overbought", profile.rsi_overbought))
+    rsi_os = float(d.get("rsi_oversold",  profile.rsi_oversold))
+    if rsi_os >= rsi_ob:
+        return jsonify({"error": "RSI Oversold must be less than RSI Overbought"}), 400
     fields = [
         "name", "risk_tolerance", "horizon", "ma_weight", "volume_weight",
         "rsi_weight", "momentum_weight", "volume_spike_threshold",
@@ -621,7 +636,8 @@ def get_suggestions():
     results = []
 
     for item in watchlist:
-        hist = fetch_history(item.symbol)
+        # 1y of history so MA200 / Golden Cross logic runs in analyze_ticker
+        hist = fetch_history(item.symbol, period="1y")
         analysis = analyze_ticker(item.symbol, hist, profile)
         if analysis:
             analysis["name"] = item.name
@@ -630,8 +646,9 @@ def get_suggestions():
             results.append(analysis)
 
     # Sort: BUY first (desc confidence), then HOLD, then SELL
+    # Unknown signal types get rank 999 so they sort to the end
     order = {"BUY": 0, "HOLD": 1, "SELL": 2}
-    results.sort(key=lambda x: (order.get(x["signal"], 1), -x["confidence"]))
+    results.sort(key=lambda x: (order.get(x["signal"], 999), -x["confidence"]))
     return jsonify(results)
 
 
@@ -642,7 +659,7 @@ def export_suggestions_csv():
     rows = []
 
     for item in watchlist:
-        hist = fetch_history(item.symbol)
+        hist = fetch_history(item.symbol, period="1y")
         analysis = analyze_ticker(item.symbol, hist, profile)
         if analysis:
             rows.append({
@@ -657,8 +674,10 @@ def export_suggestions_csv():
                 "Generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             })
 
+    fieldnames = ["Symbol", "Name", "Tier", "Signal", "Confidence",
+                  "Price", "Reasoning", "Profile", "Generated"]
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=rows[0].keys() if rows else [])
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(rows)
     return Response(
@@ -715,7 +734,8 @@ def portfolio_summary():
         "total_pnl_pct": round(total_pnl_pct, 2),
         "day_gain": round(day_gain, 2),
         "best_performer": best,
-        "worst_performer": worst,
+        # Omit worst_performer for single position — it would be identical to best
+        "worst_performer": worst if len(positions) >= 2 else None,
     })
 
 
@@ -865,15 +885,28 @@ def backup():
     )
 
 
+def _restore_float(val, field):
+    """Parse val as float; raise ValueError with a meaningful message on failure."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid numeric value for '{field}': {val!r}")
+
+
 @app.route("/api/restore", methods=["POST"])
 def restore():
     d = request.json or {}
+    if not isinstance(d, dict):
+        return jsonify({"error": "Backup must be a JSON object"}), 400
     try:
         # Watchlist
         for item in d.get("watchlist", []):
-            if not WatchlistItem.query.filter_by(symbol=item["symbol"]).first():
+            sym = str(item.get("symbol", "")).upper()
+            if not sym:
+                raise ValueError("Watchlist item missing symbol")
+            if not WatchlistItem.query.filter_by(symbol=sym).first():
                 db.session.add(WatchlistItem(
-                    symbol=item["symbol"], name=item.get("name", ""),
+                    symbol=sym, name=item.get("name", ""),
                     tier=item.get("tier", "Active Watch"), notes=item.get("notes", ""),
                     alert_direction=item.get("alert_direction"),
                     alert_price=item.get("alert_price"),
@@ -881,30 +914,48 @@ def restore():
         # Profiles
         for p in d.get("profiles", []):
             db.session.add(AnalysisProfile(
-                name=p["name"], risk_tolerance=p.get("risk_tolerance", "Moderate"),
-                horizon=p.get("horizon", "Swing"), ma_weight=p.get("ma_weight", 0.25),
-                volume_weight=p.get("volume_weight", 0.25), rsi_weight=p.get("rsi_weight", 0.25),
-                momentum_weight=p.get("momentum_weight", 0.25),
-                volume_spike_threshold=p.get("volume_spike_threshold", 1.5),
-                rsi_overbought=p.get("rsi_overbought", 70), rsi_oversold=p.get("rsi_oversold", 30),
-                momentum_days=p.get("momentum_days", 10),
-                max_trades_per_day=p.get("max_trades_per_day", 3),
-                is_active=p.get("is_active", False),
+                name=str(p.get("name", "Restored Profile")),
+                risk_tolerance=p.get("risk_tolerance", "Moderate"),
+                horizon=p.get("horizon", "Swing"),
+                ma_weight=_restore_float(p.get("ma_weight", 0.25), "ma_weight"),
+                volume_weight=_restore_float(p.get("volume_weight", 0.25), "volume_weight"),
+                rsi_weight=_restore_float(p.get("rsi_weight", 0.25), "rsi_weight"),
+                momentum_weight=_restore_float(p.get("momentum_weight", 0.25), "momentum_weight"),
+                volume_spike_threshold=_restore_float(p.get("volume_spike_threshold", 1.5), "volume_spike_threshold"),
+                rsi_overbought=_restore_float(p.get("rsi_overbought", 70), "rsi_overbought"),
+                rsi_oversold=_restore_float(p.get("rsi_oversold", 30), "rsi_oversold"),
+                momentum_days=int(p.get("momentum_days", 10)),
+                max_trades_per_day=int(p.get("max_trades_per_day", 3)),
+                is_active=bool(p.get("is_active", False)),
             ))
         # Portfolio
         for pos in d.get("portfolio", []):
+            sym = str(pos.get("symbol", "")).upper()
+            if not sym:
+                raise ValueError("Portfolio position missing symbol")
             db.session.add(PortfolioPosition(
-                symbol=pos["symbol"], shares=pos["shares"],
-                cost_basis=pos["cost_basis"], notes=pos.get("notes", ""),
-                date_acquired=datetime.strptime(pos["date_acquired"], "%Y-%m-%d").date() if pos.get("date_acquired") else None,
+                symbol=sym,
+                shares=_restore_float(pos.get("shares"), "shares"),
+                cost_basis=_restore_float(pos.get("cost_basis"), "cost_basis"),
+                notes=pos.get("notes", ""),
+                date_acquired=datetime.strptime(pos["date_acquired"], "%Y-%m-%d").date()
+                              if pos.get("date_acquired") else None,
             ))
         # Trades
         for t in d.get("trades", []):
+            sym = str(t.get("symbol", "")).upper()
+            if not sym:
+                raise ValueError("Trade missing symbol")
             db.session.add(TradeLog(
-                symbol=t["symbol"], action=t["action"], shares=t["shares"],
-                price=t["price"], notes=t.get("notes", ""),
-                date=datetime.strptime(t["date"], "%Y-%m-%d").date() if t.get("date") else date.today(),
-                realized_pnl=t.get("realized_pnl"),
+                symbol=sym,
+                action=str(t.get("action", "Buy")),
+                shares=_restore_float(t.get("shares"), "shares"),
+                price=_restore_float(t.get("price"), "price"),
+                notes=t.get("notes", ""),
+                date=datetime.strptime(t["date"], "%Y-%m-%d").date()
+                     if t.get("date") else date.today(),
+                realized_pnl=_restore_float(t["realized_pnl"], "realized_pnl")
+                             if t.get("realized_pnl") is not None else None,
             ))
         # Preferences
         for key, value in d.get("preferences", {}).items():
@@ -912,6 +963,9 @@ def restore():
 
         db.session.commit()
         return jsonify({"ok": True})
+    except (ValueError, KeyError) as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 400
@@ -1026,7 +1080,7 @@ def ticker_news(ticker):
             timeout=8,
         )
         if resp.status_code != 200:
-            return jsonify([])
+            return jsonify({"articles": []})
 
         articles = resp.json() or []
         now_ts   = int(datetime.utcnow().timestamp())
@@ -1051,7 +1105,7 @@ def ticker_news(ticker):
         _fmp_cache_set(sym, "finnhub_news", results)
         return jsonify({"articles": results})
     except Exception:
-        return jsonify([])
+        return jsonify({"articles": []})
 
 
 # ─── Correlation Matrix ───────────────────────────────────────────────────────

@@ -19,13 +19,35 @@ const S = {
 };
 
 // ════════════════════════════════════════════════════════════════
-// API CLIENT
+// XSS ESCAPE HELPER (BUG-008, BUG-009)
 // ════════════════════════════════════════════════════════════════
+function esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ════════════════════════════════════════════════════════════════
+// API CLIENT (BUG-010 — check response.ok before parsing JSON)
+// ════════════════════════════════════════════════════════════════
+async function _apiFetch(url, opts = {}) {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let msg = `${r.status} ${r.statusText}`;
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
 const api = {
-  get: (url) => fetch(url).then(r => r.json()),
-  post: (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
-  put: (url, body) => fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
-  del: (url) => fetch(url, { method: 'DELETE' }).then(r => r.json()),
+  get:  (url)        => _apiFetch(url),
+  post: (url, body)  => _apiFetch(url, { method: 'POST',   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  put:  (url, body)  => _apiFetch(url, { method: 'PUT',    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  del:  (url)        => _apiFetch(url, { method: 'DELETE' }),
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -51,6 +73,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     showOnboarding();
   }
 
+  // BUG-034: only mark as granted if already granted; 'default' means not yet asked
   if ('Notification' in window && Notification.permission === 'granted') {
     S.notifGranted = true;
     document.getElementById('notif-btn').classList.add('active');
@@ -99,7 +122,10 @@ async function migrateLocalStorage() {
       await loadWatchlist();
       showToast('Migrated your existing watchlist to the database.', 'success');
     }
-  } catch (e) {}
+  } catch (e) {
+    // BUG-030: log migration failures so they're diagnosable
+    console.warn('migrateLocalStorage failed:', e);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -139,7 +165,53 @@ function goStep(n) {
   if (n === 2) renderAlertInputs();
 }
 
-// Onboarding weight sync
+// ── Weight slider rebalancing (BUG-005) ─────────────────────────────────────
+// Keeps all 4 sliders summed to exactly 100% by redistributing the remainder
+// proportionally among the unchanged sliders whenever one is moved.
+function _rebalanceSliders(keys, changedKey, newVal, sliderIdFn, labelIdFn) {
+  const others = keys.filter(k => k !== changedKey);
+  const cv = Math.max(0, Math.min(100, parseInt(newVal) || 0));
+  const remaining = Math.max(0, 100 - cv);
+  const otherVals = others.map(k => Math.max(0, parseInt(document.getElementById(sliderIdFn(k))?.value || 0)));
+  const otherSum  = otherVals.reduce((a, b) => a + b, 0);
+  let given = 0;
+  others.forEach((k, i) => {
+    const isLast = i === others.length - 1;
+    let v = isLast
+      ? Math.max(0, remaining - given)
+      : otherSum > 0
+        ? Math.round(otherVals[i] / otherSum * remaining)
+        : Math.floor(remaining / others.length);
+    v = Math.max(0, Math.min(100, v));
+    given += v;
+    const sl = document.getElementById(sliderIdFn(k));
+    const lb = document.getElementById(labelIdFn(k));
+    if (sl) sl.value = v;
+    if (lb) lb.textContent = v + '%';
+  });
+  const lb = document.getElementById(labelIdFn(changedKey));
+  if (lb) lb.textContent = cv + '%';
+}
+
+// Onboarding sliders (IDs: w-ma / w-ma-val)
+function rebalanceObWeight(key, val) {
+  _rebalanceSliders(
+    ['ma', 'vol', 'rsi', 'mom'], key, val,
+    k => `w-${k}`,
+    k => `w-${k}-val`
+  );
+}
+
+// Profile-editor sliders (IDs: pe-w-ma / pe-w-ma-v)
+function rebalancePeWeight(key, val) {
+  _rebalanceSliders(
+    ['ma', 'vol', 'rsi', 'mom'], key, val,
+    k => `pe-w-${k}`,
+    k => `pe-w-${k}-v`
+  );
+}
+
+// Legacy single-slider display update (kept for any remaining callers)
 function updateWeight(key, val) {
   document.getElementById(`w-${key}-val`).textContent = val + '%';
 }
@@ -170,8 +242,12 @@ async function addTicker() {
 }
 
 async function quickAdd(sym) {
+  // BUG-015: disable all quick-add buttons during validation so clicks don't queue
+  const qaButtons = document.querySelectorAll('.qa-btn');
+  qaButtons.forEach(b => { b.disabled = true; });
   document.getElementById('ticker-input').value = sym;
   await addTicker();
+  qaButtons.forEach(b => { b.disabled = false; });
 }
 
 function setStatus(msg, type) {
@@ -184,10 +260,10 @@ function renderChips() {
   const el = document.getElementById('ticker-chips');
   el.innerHTML = S.watchlist.map(t => `
     <div class="chip">
-      <span class="chip-sym">${t.symbol}</span>
-      <span class="chip-name">${t.name}</span>
-      <span class="chip-tier tier-badge ${tierClass(t.tier)}" onclick="cycleTier('${t.symbol}')">${t.tier}</span>
-      <button class="chip-remove" onclick="removeTicker('${t.symbol}')">✕</button>
+      <span class="chip-sym">${esc(t.symbol)}</span>
+      <span class="chip-name">${esc(t.name)}</span>
+      <span class="chip-tier tier-badge ${tierClass(t.tier)}" onclick="cycleTier('${esc(t.symbol)}')">${esc(t.tier)}</span>
+      <button class="chip-remove" onclick="removeTicker('${esc(t.symbol)}')">✕</button>
     </div>`).join('');
 }
 
@@ -263,9 +339,9 @@ async function launchDashboard() {
   const rsiW = parseInt(document.getElementById('w-rsi')?.value || 25) / 100;
   const momW = parseInt(document.getElementById('w-mom')?.value || 25) / 100;
 
-  // Save profile only if no profiles exist yet
-  if (S.profiles.length === 0) {
-    const profile = await api.post('/api/profiles', {
+  // BUG-004: always save the onboarding profile (even when re-onboarding after reset)
+  try {
+    await api.post('/api/profiles', {
       name: profileName, risk_tolerance: risk, horizon,
       ma_weight: maW, volume_weight: volW, rsi_weight: rsiW, momentum_weight: momW,
       rsi_overbought: parseFloat(document.getElementById('ob-rsi-ob')?.value || 70),
@@ -274,8 +350,11 @@ async function launchDashboard() {
       max_trades_per_day: parseInt(document.getElementById('ob-max-trades')?.value || 3),
       is_active: true,
     });
-    S.profiles = [profile];
-    S.activeProfile = profile;
+    await loadProfiles();  // sync S.profiles + S.activeProfile from server
+  } catch (e) {
+    // RSI validation error or server error — surface it and abort launch
+    showToast(e.message || 'Failed to save profile.', 'error');
+    return;
   }
 
   const intervalEl = document.querySelector('[name="interval"]:checked');
@@ -391,19 +470,16 @@ async function fetchTickerDetails() {
   } catch (e) {}
 }
 
-// ── Market helpers ─────────────────────────────────────────────────────────
-function isMarketOpen() {
-  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
-  return day >= 1 && day <= 5 && h >= 9.5 && h < 16;
+// ── Market helpers (BUG-028: always use US/Eastern, regardless of browser locale) ──
+function _etTime() {
+  // Parse current time in US Eastern so market-hours checks are correct worldwide
+  const etStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const et = new Date(etStr);
+  return { day: et.getDay(), h: et.getHours() + et.getMinutes() / 60 };
 }
-function isPreMarket() {
-  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
-  return day >= 1 && day <= 5 && h >= 4 && h < 9.5;
-}
-function isAfterHours() {
-  const d = new Date(), day = d.getDay(), h = d.getHours() + d.getMinutes() / 60;
-  return day >= 1 && day <= 5 && h >= 16 && h < 20;
-}
+function isMarketOpen()  { const { day, h } = _etTime(); return day >= 1 && day <= 5 && h >= 9.5 && h < 16; }
+function isPreMarket()   { const { day, h } = _etTime(); return day >= 1 && day <= 5 && h >= 4   && h < 9.5; }
+function isAfterHours()  { const { day, h } = _etTime(); return day >= 1 && day <= 5 && h >= 16  && h < 20; }
 
 function renderDashboard() {
   const el = document.getElementById('dashboard-content');
@@ -423,7 +499,7 @@ function renderCompact(el) {
     const q   = S.quotes[t.symbol];
     const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
-    if (!q || q.error) return `<div class="stock-card"><div class="card-sym">${t.symbol}</div><div style="color:var(--red);font-size:11px">${q?.error || 'Loading...'}</div><button class="card-remove" onclick="removeTicker('${t.symbol}')">✕</button></div>`;
+    if (!q || q.error) return `<div class="stock-card"><div class="card-sym">${esc(t.symbol)}</div><div style="color:var(--red);font-size:11px">${esc((q?.error || 'Loading...').slice(0, 50))}</div><button class="card-remove" onclick="removeTicker('${esc(t.symbol)}')">✕</button></div>`;
     const dir = q.pct_change >= 0 ? 'up' : 'down';
     const alertOn = S.triggeredAlerts.has(t.symbol);
 
@@ -473,8 +549,8 @@ function renderCompact(el) {
           <div>
             <div class="card-sym" style="cursor:pointer" onclick="openChart('${t.symbol}')" title="Open chart">${t.symbol}</div>
             <div class="card-meta">
-              <span class="card-name">${t.name}</span>
-              <span class="tier-badge ${tierClass(t.tier)}">${t.tier}</span>
+              <span class="card-name">${esc(t.name)}</span>
+              <span class="tier-badge ${tierClass(t.tier)}">${esc(t.tier)}</span>
             </div>
           </div>
           <div class="card-price-block">
@@ -496,7 +572,7 @@ function renderCompact(el) {
             ${q.ma20 ? `<span class="signal-badge ${q.above_ma20 ? 'signal-bull' : 'signal-bear'}">${q.above_ma20 ? '▲' : '▼'} MA20</span>` : ''}
             ${q.ma50 ? `<span class="signal-badge ${q.above_ma50 ? 'signal-bull' : 'signal-bear'}">${q.above_ma50 ? '▲' : '▼'} MA50</span>` : ''}
             ${earnBadge}
-            ${t.notes ? `<span class="signal-badge signal-neutral" title="${t.notes}">📝</span>` : ''}
+            ${t.notes ? `<span class="signal-badge signal-neutral" title="${esc(t.notes)}">📝</span>` : ''}
           </div>
           ${sug ? `<span class="suggestion-badge ${sug.signal === 'BUY' ? 'sug-buy' : sug.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${sug.signal === 'BUY' ? '🟢' : sug.signal === 'SELL' ? '🔴' : '🟡'} ${sug.signal} ${sug.confidence}%</span>` : ''}
         </div>
@@ -510,7 +586,7 @@ function renderExpanded(el) {
     const q   = S.quotes[t.symbol];
     const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
-    if (!q || q.error) return `<tr><td class="td-accent"></td><td><div class="td-sym">${t.symbol}</div></td><td colspan="8" style="color:var(--red)">${q?.error || 'Loading...'}</td><td><button onclick="removeTicker('${t.symbol}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:var(--font)">✕</button></td></tr>`;
+    if (!q || q.error) return `<tr><td class="td-accent"></td><td><div class="td-sym">${esc(t.symbol)}</div></td><td colspan="8" style="color:var(--red)">${esc((q?.error || 'Loading...').slice(0, 50))}</td><td><button onclick="removeTicker('${esc(t.symbol)}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-family:var(--font)">✕</button></td></tr>`;
     const dir = q.pct_change >= 0 ? 'up' : 'down';
 
     // Short interest badge
@@ -540,7 +616,7 @@ function renderExpanded(el) {
         <td class="td-accent"><div class="td-accent-inner" style="background:${q.above_ma50 ? 'var(--green)' : 'var(--red)'}"></div></td>
         <td>
           <div class="td-sym" style="cursor:pointer" onclick="openChart('${t.symbol}')" title="Open chart">${t.symbol} <span class="tier-badge ${tierClass(t.tier)}" style="font-size:9px;padding:1px 4px">${t.tier}</span></div>
-          <div class="td-name">${t.name}</div>
+          <div class="td-name">${esc(t.name)}</div>
         </td>
         <td class="${dir}" style="font-weight:700;font-size:14px">$${q.price.toFixed(2)}</td>
         <td class="${dir}">${q.change >= 0 ? '+' : ''}$${q.change.toFixed(2)}</td>
@@ -722,7 +798,7 @@ async function renderPortfolio() {
         <td class="${pnlClass}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
         <td class="${pnlClass}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</td>
         <td class="${dayGain >= 0 ? 'up' : 'down'}">${dayGain >= 0 ? '+' : ''}$${dayGain.toFixed(2)}</td>
-        <td class="pos-notes" title="${pos.notes}">${pos.notes || '—'}</td>
+        <td class="pos-notes" title="${esc(pos.notes)}">${esc(pos.notes) || '—'}</td>
         <td>
           <div class="td-actions">
             <button onclick="openEditPosition(${pos.id})" title="Edit">✎</button>
@@ -823,7 +899,7 @@ function renderJournal() {
         <td>$${t.total.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2})}</td>
         <td>${pnlStr}</td>
         <td>${sigBadge}</td>
-        <td style="color:var(--text3);font-size:11px">${t.notes || ''}</td>
+        <td style="color:var(--text3);font-size:11px">${esc(t.notes) || ''}</td>
         <td><button class="td-del" onclick="deleteTrade(${t.id})">✕</button></td>
       </tr>`;
   }).join('');
@@ -902,17 +978,22 @@ function drawPnLChart(trades) {
   });
 }
 
+let _filterJournalTimer = null;
 function filterJournal() {
-  const sym = document.getElementById('journal-sym-filter').value.toUpperCase();
-  const action = document.getElementById('journal-action-filter').value;
-  const start = document.getElementById('journal-start').value;
-  const end = document.getElementById('journal-end').value;
-  const filters = {};
-  if (sym) filters.symbol = sym;
-  if (action) filters.action = action;
-  if (start) filters.start = start;
-  if (end) filters.end = end;
-  loadTrades(filters).then(renderJournal);
+  // BUG-017: debounce so keystroke-by-keystroke typing doesn't fire a query per character
+  clearTimeout(_filterJournalTimer);
+  _filterJournalTimer = setTimeout(() => {
+    const sym    = document.getElementById('journal-sym-filter').value.toUpperCase();
+    const action = document.getElementById('journal-action-filter').value;
+    const start  = document.getElementById('journal-start').value;
+    const end    = document.getElementById('journal-end').value;
+    const filters = {};
+    if (sym)    filters.symbol = sym;
+    if (action) filters.action = action;
+    if (start)  filters.start  = start;
+    if (end)    filters.end    = end;
+    loadTrades(filters).then(renderJournal);
+  }, 275);
 }
 
 function openLogTrade() {
@@ -1065,8 +1146,8 @@ function renderProfilesList() {
   el.innerHTML = S.profiles.map(p => `
     <div class="profile-item ${p.is_active ? 'is-active' : ''}">
       <div>
-        <div class="profile-item-name">${p.name} ${p.is_active ? '<span class="profile-active-badge">ACTIVE</span>' : ''}</div>
-        <div class="profile-item-meta">${p.risk_tolerance} · ${p.horizon} · Max ${p.max_trades_per_day} trades/day</div>
+        <div class="profile-item-name">${esc(p.name)} ${p.is_active ? '<span class="profile-active-badge">ACTIVE</span>' : ''}</div>
+        <div class="profile-item-meta">${esc(p.risk_tolerance)} · ${esc(p.horizon)} · Max ${p.max_trades_per_day} trades/day</div>
       </div>
       <div class="profile-item-actions">
         ${!p.is_active ? `<button class="btn-sm" onclick="activateProfile(${p.id})">SET ACTIVE</button>` : ''}
@@ -1084,7 +1165,7 @@ function renderSettingsAlerts() {
       <span class="sym">${t.symbol}</span>
       <select id="sadir-${t.symbol}" onchange="saveAlertSettings('${t.symbol}')">
         <option value="above" ${t.alert_direction === 'above' ? 'selected' : ''}>ABOVE</option>
-        <option value="below" ${t.alert_direction !== 'above' ? 'selected' : ''}>BELOW</option>
+        <option value="below" ${t.alert_direction === 'below' ? 'selected' : ''}>BELOW</option>
       </select>
       <input type="number" step="0.01" min="0" id="saprice-${t.symbol}"
         value="${t.alert_price || ''}" placeholder="price"
@@ -1173,7 +1254,7 @@ async function saveProfile() {
     closeModal('profile-modal');
     renderProfilesList();
     showToast('Profile saved.', 'success');
-  } catch (e) { showToast('Failed to save profile.', 'error'); }
+  } catch (e) { showToast(e.message || 'Failed to save profile.', 'error'); }
 }
 
 async function activateProfile(id) {
@@ -1198,14 +1279,23 @@ async function deleteProfile(id) {
 // ════════════════════════════════════════════════════════════════
 async function requestNotifications() {
   if (!('Notification' in window)) { showToast('Notifications not supported.', 'error'); return; }
+  // BUG-034: treat 'default' as not-yet-asked; only show denied toast if actually denied
+  if (Notification.permission === 'granted') {
+    S.notifGranted = true;
+    document.getElementById('notif-btn').classList.add('active');
+    showToast('Notifications already enabled.', 'success');
+    return;
+  }
   const perm = await Notification.requestPermission();
   S.notifGranted = perm === 'granted';
   document.getElementById('notif-btn').classList.toggle('active', S.notifGranted);
   if (S.notifGranted) {
     showToast('Desktop notifications enabled.', 'success');
     new Notification('▣ PG Stock Analysis', { body: 'Price alerts are now active.' });
+  } else if (perm === 'denied') {
+    showToast('Notification permission denied — enable it in browser settings.', 'error');
   } else {
-    showToast('Notification permission denied.', 'error');
+    showToast('Notification request dismissed.', 'error');
   }
 }
 
@@ -1230,6 +1320,8 @@ function checkAlerts() {
 // ════════════════════════════════════════════════════════════════
 function startAutoRefresh() {
   stopAutoRefresh();
+  // BUG-029: don't waste cycles refreshing while watchlist is empty
+  if (S.watchlist.length === 0) return;
   S.countdownVal = parseInt(S.preferences.interval || 300);
   updateCountdown();
   S.countdownTimer = setInterval(() => {
@@ -1251,8 +1343,7 @@ function updateCountdown() {
 function updateMarketStatus() {
   const el = document.getElementById('market-status');
   if (!el) return;
-  const now = new Date(), day = now.getDay(), h = now.getHours() + now.getMinutes() / 60;
-  const open = day >= 1 && day <= 5 && h >= 9.5 && h < 16;
+  const open = isMarketOpen();   // already uses US/Eastern via _etTime()
   el.textContent = open ? '● MARKET OPEN' : '○ MARKET CLOSED';
   el.className = 'market-status ' + (open ? 'market-open' : 'market-closed');
 }
@@ -1303,9 +1394,8 @@ function copyScript() {
 
 function generateScriptableScript() {
   const syms = S.watchlist.map(t => t.symbol);
-  const host = window.location.hostname || 'localhost';
-  const port = window.location.port || '5000';
-  const baseUrl = `http://${host}:${port}`;
+  // BUG-006: use window.location.origin so protocol and port are always correct
+  const baseUrl = window.location.origin;
 
   return `// ▣ PG Stock Analysis — Scriptable iOS Widget
 // Paste into Scriptable app, name it "StockTicker"
@@ -1876,7 +1966,8 @@ function applyTheme(theme) {
 // ════════════════════════════════════════════════════════════════
 let heatmapRefreshTimer = null;
 
-async function renderHeatmapTab() {
+// BUG-018: force=true skips the auto-refresh timer so the button actually forces a fresh fetch
+async function renderHeatmapTab(force = false) {
   const plotEl    = document.getElementById('heatmap-plot');
   const loadingEl = document.getElementById('heatmap-loading');
   const summaryEl = document.getElementById('heatmap-summary');
@@ -1962,11 +2053,13 @@ async function renderHeatmapTab() {
     const updEl = document.getElementById('heatmap-updated');
     if (updEl) updEl.textContent = now;
 
-    // Auto-refresh every 5 min while tab is active
-    if (heatmapRefreshTimer) clearTimeout(heatmapRefreshTimer);
-    heatmapRefreshTimer = setTimeout(() => {
-      if (document.getElementById('tab-heatmap')?.classList.contains('active')) renderHeatmapTab();
-    }, 300_000);
+    // Auto-refresh every 5 min while tab is active (skip scheduling when forced)
+    if (!force) {
+      if (heatmapRefreshTimer) clearTimeout(heatmapRefreshTimer);
+      heatmapRefreshTimer = setTimeout(() => {
+        if (document.getElementById('tab-heatmap')?.classList.contains('active')) renderHeatmapTab();
+      }, 300_000);
+    }
 
   } catch (e) {
     if (loadingEl) loadingEl.style.display = 'none';
@@ -1978,7 +2071,8 @@ async function renderHeatmapTab() {
 // ════════════════════════════════════════════════════════════════
 // CORRELATION TAB
 // ════════════════════════════════════════════════════════════════
-async function renderCorrelationTab() {
+// BUG-018: force parameter accepted for consistency with refresh button
+async function renderCorrelationTab(force = false) {
   const plotEl    = document.getElementById('corr-plot');
   const loadingEl = document.getElementById('corr-loading');
   if (!plotEl) return;
@@ -2082,10 +2176,10 @@ async function loadChartNews(symbol) {
       return `
         <div class="news-item">
           <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">
-            <div class="news-headline">${a.headline}</div>
+            <div class="news-headline">${esc(a.headline)}</div>
             <div class="news-meta">
-              <span class="news-source">${a.source}</span>
-              <span>${a.time_ago || ''}</span>
+              <span class="news-source">${esc(a.source)}</span>
+              <span>${esc(a.time_ago || '')}</span>
               <span class="news-sentiment ${sentClass}">${sentLabel}</span>
             </div>
           </a>

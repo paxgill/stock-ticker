@@ -7,7 +7,7 @@ db = SQLAlchemy()
 class WatchlistItem(db.Model):
     __tablename__ = "watchlist"
     id = db.Column(db.Integer, primary_key=True)
-    symbol = db.Column(db.String(10), unique=True, nullable=False, index=True)
+    symbol = db.Column(db.String(16), unique=True, nullable=False, index=True)
     name = db.Column(db.String(100), default="")
     tier = db.Column(db.String(20), default="Active Watch")
     notes = db.Column(db.Text, default="")
@@ -133,7 +133,12 @@ class Preference(db.Model):
 class FMPCache(db.Model):
     __tablename__ = "fmp_cache"
     id = db.Column(db.Integer, primary_key=True)
-    symbol = db.Column(db.String(10), nullable=False, index=True)
+    symbol = db.Column(db.String(16), nullable=False)
     endpoint = db.Column(db.String(50), nullable=False)
     data = db.Column(db.Text)
     cached_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('symbol', 'endpoint', name='uix_fmp_symbol_endpoint'),
+        db.Index('ix_fmp_symbol_endpoint', 'symbol', 'endpoint'),
+    )

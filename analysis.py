@@ -109,24 +109,24 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
 
     # ── 2. Volume Spike ──────────────────────────────────────────────
     w_vol = float(profile.get("volume_weight", 0.25))
-    if w_vol > 0 and len(volumes) >= 30:
-        avg_vol_30 = float(volumes.tail(30).mean())
+    if w_vol > 0 and len(volumes) >= 20:
+        avg_vol_20 = float(volumes.tail(20).mean())
         cur_vol = float(volumes.iloc[-1])
         threshold = float(profile.get("volume_spike_threshold", 1.5))
-        vol_ratio = cur_vol / avg_vol_30 if avg_vol_30 > 0 else 1.0
+        vol_ratio = cur_vol / avg_vol_20 if avg_vol_20 > 0 else 1.0
 
         if vol_ratio >= threshold:
             score = 1.0 if price_up else 0.0
             direction = "bull" if price_up else "bear"
             reason = (
-                f"Volume {vol_ratio:.1f}× 30d avg"
+                f"Volume {vol_ratio:.1f}× 20d avg"
                 f" on {'up' if price_up else 'down'} day"
                 f" — {'Bullish' if price_up else 'Bearish'} spike"
             )
         else:
             score = 0.5
             direction = "neutral"
-            reason = f"Volume {vol_ratio:.1f}× 30d avg — no spike ({threshold}× threshold)"
+            reason = f"Volume {vol_ratio:.1f}× 20d avg — no spike ({threshold}× threshold)"
 
         if low_volume:
             reason += f" · RVOL {rvol:.2f}× — low volume, less reliable"

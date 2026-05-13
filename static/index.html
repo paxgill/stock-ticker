@@ -103,22 +103,22 @@
           <div class="sliders">
             <div class="slider-row">
               <span class="slider-lbl">MA Crossover</span>
-              <input type="range" min="0" max="100" value="25" id="w-ma" oninput="updateWeight('ma',this.value)">
+              <input type="range" min="0" max="100" value="25" id="w-ma" oninput="rebalanceObWeight('ma',this.value)">
               <span class="slider-val" id="w-ma-val">25%</span>
             </div>
             <div class="slider-row">
               <span class="slider-lbl">Volume Spike</span>
-              <input type="range" min="0" max="100" value="25" id="w-vol" oninput="updateWeight('vol',this.value)">
+              <input type="range" min="0" max="100" value="25" id="w-vol" oninput="rebalanceObWeight('vol',this.value)">
               <span class="slider-val" id="w-vol-val">25%</span>
             </div>
             <div class="slider-row">
               <span class="slider-lbl">RSI Signal</span>
-              <input type="range" min="0" max="100" value="25" id="w-rsi" oninput="updateWeight('rsi',this.value)">
+              <input type="range" min="0" max="100" value="25" id="w-rsi" oninput="rebalanceObWeight('rsi',this.value)">
               <span class="slider-val" id="w-rsi-val">25%</span>
             </div>
             <div class="slider-row">
               <span class="slider-lbl">Momentum</span>
-              <input type="range" min="0" max="100" value="25" id="w-mom" oninput="updateWeight('mom',this.value)">
+              <input type="range" min="0" max="100" value="25" id="w-mom" oninput="rebalanceObWeight('mom',this.value)">
               <span class="slider-val" id="w-mom-val">25%</span>
             </div>
           </div>
@@ -141,7 +141,7 @@
           <label>Volume spike threshold</label>
           <div class="inline-field">
             <input type="number" id="ob-vol-thresh" value="1.5" min="1.1" max="5" step="0.1">
-            <span class="inline-lbl">× 30-day average</span>
+            <span class="inline-lbl">× 20-day average</span>
           </div>
         </div>
       </div>
@@ -468,10 +468,10 @@
       <div class="setting-group">
         <label class="setting-label">SIGNAL WEIGHTS</label>
         <div class="sliders">
-          <div class="slider-row"><span class="slider-lbl">MA Crossover</span><input type="range" min="0" max="100" value="25" id="pe-w-ma" oninput="document.getElementById('pe-w-ma-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-ma-v">25%</span></div>
-          <div class="slider-row"><span class="slider-lbl">Volume Spike</span><input type="range" min="0" max="100" value="25" id="pe-w-vol" oninput="document.getElementById('pe-w-vol-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-vol-v">25%</span></div>
-          <div class="slider-row"><span class="slider-lbl">RSI Signal</span><input type="range" min="0" max="100" value="25" id="pe-w-rsi" oninput="document.getElementById('pe-w-rsi-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-rsi-v">25%</span></div>
-          <div class="slider-row"><span class="slider-lbl">Momentum</span><input type="range" min="0" max="100" value="25" id="pe-w-mom" oninput="document.getElementById('pe-w-mom-v').textContent=this.value+'%'"><span class="slider-val" id="pe-w-mom-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">MA Crossover</span><input type="range" min="0" max="100" value="25" id="pe-w-ma"  oninput="rebalancePeWeight('ma', this.value)"><span class="slider-val" id="pe-w-ma-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">Volume Spike</span><input type="range" min="0" max="100" value="25" id="pe-w-vol" oninput="rebalancePeWeight('vol',this.value)"><span class="slider-val" id="pe-w-vol-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">RSI Signal</span>  <input type="range" min="0" max="100" value="25" id="pe-w-rsi" oninput="rebalancePeWeight('rsi',this.value)"><span class="slider-val" id="pe-w-rsi-v">25%</span></div>
+          <div class="slider-row"><span class="slider-lbl">Momentum</span>    <input type="range" min="0" max="100" value="25" id="pe-w-mom" oninput="rebalancePeWeight('mom',this.value)"><span class="slider-val" id="pe-w-mom-v">25%</span></div>
         </div>
       </div>
       <div class="setting-group three-col">
@@ -481,7 +481,7 @@
       </div>
       <div class="setting-group">
         <label class="setting-label">VOLUME SPIKE THRESHOLD</label>
-        <div class="inline-field"><input type="number" id="pe-vol-thresh" value="1.5" min="1.1" max="5" step="0.1" class="number-input"><span class="inline-lbl">× 30d avg volume</span></div>
+        <div class="inline-field"><input type="number" id="pe-vol-thresh" value="1.5" min="1.1" max="5" step="0.1" class="number-input"><span class="inline-lbl">× 20d avg volume</span></div>
       </div>
       <div class="setting-group">
         <label class="setting-label">MOMENTUM LOOKBACK</label>
