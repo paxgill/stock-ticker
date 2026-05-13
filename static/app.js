@@ -16,6 +16,8 @@ const S = {
   notifGranted: false,
   triggeredAlerts: new Set(),
   theme: localStorage.getItem('pg_theme') || 'dark',
+  strategyPresets: [],
+  presetLocked: { ob: false, pe: false },
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -62,6 +64,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     loadWatchlist(),
     loadProfiles(),
     loadPreferences(),
+    loadStrategyPresets(),
   ]);
 
   // Migrate old localStorage state if DB is empty
@@ -348,6 +351,7 @@ async function launchDashboard() {
       rsi_oversold: parseFloat(document.getElementById('ob-rsi-os')?.value || 30),
       volume_spike_threshold: parseFloat(document.getElementById('ob-vol-thresh')?.value || 1.5),
       max_trades_per_day: parseInt(document.getElementById('ob-max-trades')?.value || 3),
+      momentum_days: parseInt(document.getElementById('ob-mom-days')?.value || 10),
       is_active: true,
     });
     await loadProfiles();  // sync S.profiles + S.activeProfile from server
@@ -1196,12 +1200,179 @@ async function resetApp() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// STRATEGY PRESETS
+// ════════════════════════════════════════════════════════════════
+async function loadStrategyPresets() {
+  try {
+    const data = await api.get('/api/strategies/presets');
+    S.strategyPresets = data.strategies || [];
+    _populatePresetDropdown('ob-preset-select', S.strategyPresets);
+    _populatePresetDropdown('pe-preset-select', S.strategyPresets);
+  } catch (e) {
+    console.warn('Could not load strategy presets:', e);
+  }
+}
+
+function _populatePresetDropdown(selectId, presets) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  // Keep only the first "— Custom / Manual —" option
+  while (sel.options.length > 1) sel.remove(1);
+  const types = ['Trend', 'Mean Reversion', 'Calendar', 'TAA', 'Volatility'];
+  const byType = {};
+  presets.forEach(p => { (byType[p.type] = byType[p.type] || []).push(p); });
+  types.forEach(t => {
+    if (!byType[t]?.length) return;
+    const og = document.createElement('optgroup');
+    og.label = t;
+    byType[t].forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+}
+
+const PRESET_TYPE_COLORS = {
+  'Trend':          '#22c55e',
+  'Mean Reversion': '#3b82f6',
+  'Calendar':       '#eab308',
+  'TAA':            '#a855f7',
+  'Volatility':     '#f97316',
+};
+const PRESET_TYPE_SLUG = {
+  'Trend':          'trend',
+  'Mean Reversion': 'mean-reversion',
+  'Calendar':       'calendar',
+  'TAA':            'taa',
+  'Volatility':     'volatility',
+};
+
+function loadStrategyPreset(name, ctx) {
+  const infoId = ctx === 'ob' ? 'ob-preset-info' : 'pe-preset-info';
+  const custId = ctx === 'ob' ? 'ob-preset-customize' : 'pe-preset-customize';
+  const infoEl = document.getElementById(infoId);
+  const custEl = document.getElementById(custId);
+
+  if (!name) {
+    // User picked "Custom / Manual" — unlock sliders, hide card
+    _setPresetLock(ctx, false);
+    if (infoEl) infoEl.style.display = 'none';
+    if (custEl) custEl.style.display = 'none';
+    return;
+  }
+
+  const preset = S.strategyPresets.find(p => p.name === name);
+  if (!preset) return;
+
+  // ── Populate all fields ──────────────────────────────────────
+  if (ctx === 'ob') {
+    _setSliderPct('w-ma',  'w-ma-val',  preset.ma_weight);
+    _setSliderPct('w-vol', 'w-vol-val', preset.volume_weight);
+    _setSliderPct('w-rsi', 'w-rsi-val', preset.rsi_weight);
+    _setSliderPct('w-mom', 'w-mom-val', preset.momentum_weight);
+    document.querySelectorAll('[name="ob-risk"]').forEach(r => { r.checked = r.value === preset.risk_tolerance; });
+    document.querySelectorAll('[name="ob-horizon"]').forEach(r => { r.checked = r.value === preset.horizon; });
+    _setInputVal('ob-rsi-ob',     preset.rsi_overbought);
+    _setInputVal('ob-rsi-os',     preset.rsi_oversold);
+    _setInputVal('ob-max-trades', preset.max_trades_per_day);
+    _setInputVal('ob-vol-thresh', preset.volume_spike_threshold);
+    _setInputVal('ob-mom-days',   preset.momentum_days);
+  } else {
+    _setSliderPct('pe-w-ma',  'pe-w-ma-v',  preset.ma_weight);
+    _setSliderPct('pe-w-vol', 'pe-w-vol-v', preset.volume_weight);
+    _setSliderPct('pe-w-rsi', 'pe-w-rsi-v', preset.rsi_weight);
+    _setSliderPct('pe-w-mom', 'pe-w-mom-v', preset.momentum_weight);
+    document.querySelectorAll('[name="pe-risk"]').forEach(r => { r.checked = r.value === preset.risk_tolerance; });
+    document.querySelectorAll('[name="pe-horizon"]').forEach(r => { r.checked = r.value === preset.horizon; });
+    _setInputVal('pe-rsi-ob',     preset.rsi_overbought);
+    _setInputVal('pe-rsi-os',     preset.rsi_oversold);
+    _setInputVal('pe-max-trades', preset.max_trades_per_day);
+    _setInputVal('pe-vol-thresh', preset.volume_spike_threshold);
+    _setInputVal('pe-mom-days',   preset.momentum_days);
+  }
+
+  // ── Info card ────────────────────────────────────────────────
+  _renderPresetInfoCard(preset, infoId);
+
+  // ── Lock sliders ─────────────────────────────────────────────
+  _setPresetLock(ctx, true);
+  if (custEl) custEl.style.display = 'flex';
+}
+
+function _setSliderPct(sliderId, labelId, frac) {
+  const pct = Math.round(frac * 100);
+  const sl = document.getElementById(sliderId);
+  const lb = document.getElementById(labelId);
+  if (sl) sl.value = pct;
+  if (lb) lb.textContent = pct + '%';
+}
+
+function _setInputVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.value = val;
+}
+
+function _renderPresetInfoCard(preset, cardId) {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  const color = PRESET_TYPE_COLORS[preset.type] || '#888';
+  const slug  = PRESET_TYPE_SLUG[preset.type] || 'trend';
+  el.className = `preset-info-card preset-type-${slug}`;
+  el.innerHTML = `
+    <div class="pic-header">
+      <span class="pic-type-badge" style="background:${color}22;color:${color};border-color:${color}55">${esc(preset.type)}</span>
+      <span class="pic-meta">⚙ ${esc(preset.complexity)}</span>
+      <span class="pic-meta">↗ ${esc(preset.expected_return)}</span>
+    </div>
+    <p class="pic-desc">${esc(preset.description)}</p>
+    <div class="pic-weights">
+      <span>MA <strong>${Math.round(preset.ma_weight * 100)}%</strong></span>
+      <span>Vol <strong>${Math.round(preset.volume_weight * 100)}%</strong></span>
+      <span>RSI <strong>${Math.round(preset.rsi_weight * 100)}%</strong></span>
+      <span>Mom <strong>${Math.round(preset.momentum_weight * 100)}%</strong></span>
+    </div>
+  `;
+  el.style.display = 'block';
+}
+
+function customizePreset(ctx) {
+  const selectId = ctx === 'ob' ? 'ob-preset-select' : 'pe-preset-select';
+  const custId   = ctx === 'ob' ? 'ob-preset-customize' : 'pe-preset-customize';
+  const infoId   = ctx === 'ob' ? 'ob-preset-info' : 'pe-preset-info';
+  const sel = document.getElementById(selectId);
+  if (sel) sel.value = '';
+  _setPresetLock(ctx, false);
+  const custEl = document.getElementById(custId);
+  if (custEl) custEl.style.display = 'none';
+  const infoEl = document.getElementById(infoId);
+  if (infoEl) infoEl.style.display = 'none';
+}
+
+function _setPresetLock(ctx, locked) {
+  S.presetLocked[ctx] = locked;
+  const containerId = ctx === 'ob' ? 'ob-sliders' : 'pe-sliders';
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.classList.toggle('preset-locked', locked);
+  container.querySelectorAll('input[type="range"]').forEach(sl => { sl.disabled = locked; });
+}
+
+// ════════════════════════════════════════════════════════════════
 // PROFILE EDITOR
 // ════════════════════════════════════════════════════════════════
 function openProfileEditor(id) {
   const profile = id ? S.profiles.find(p => p.id === id) : null;
   document.getElementById('pe-id').value = id || '';
   document.getElementById('profile-modal-title').textContent = id ? 'EDIT PROFILE' : 'NEW PROFILE';
+  // Reset preset picker state
+  const peSel = document.getElementById('pe-preset-select');
+  if (peSel) peSel.value = '';
+  document.getElementById('pe-preset-info')?.style.setProperty('display', 'none');
+  document.getElementById('pe-preset-customize')?.style.setProperty('display', 'none');
+  _setPresetLock('pe', false);
   document.getElementById('pe-name').value = profile?.name || 'New Profile';
   document.querySelectorAll('[name="pe-risk"]').forEach(r => { r.checked = r.value === (profile?.risk_tolerance || 'Moderate'); });
   document.querySelectorAll('[name="pe-horizon"]').forEach(r => { r.checked = r.value === (profile?.horizon || 'Swing'); });

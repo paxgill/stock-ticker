@@ -933,6 +933,103 @@ body, .stock-card, .modal-box, .expanded-table td,
   .signal-card { border: 1px solid #ccc; break-inside: avoid; margin-bottom: 12px; }
 }
 
+/* ─── Strategy Preset Picker ────────────────────────────────────── */
+.preset-section {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.preset-select-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.preset-select-row label {
+  font-size: 12px;
+  color: var(--text2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.preset-select-row select {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.preset-select-row select:focus { outline: none; border-color: var(--accent); }
+/* Profile editor: full-width select styled by .setting-group select rule */
+.preset-info-card {
+  margin-top: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 12px;
+}
+.pic-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.pic-type-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid;
+}
+.pic-meta {
+  font-size: 11px;
+  color: var(--text3);
+}
+.pic-desc {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.45;
+}
+.pic-weights {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text3);
+}
+.pic-weights strong { color: var(--text); }
+.preset-customize-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.preset-lock-msg {
+  font-size: 11px;
+  color: var(--text3);
+  letter-spacing: 0.02em;
+}
+/* Locked sliders: dim and disable pointer events */
+.preset-locked {
+  position: relative;
+  border-radius: 4px;
+  outline: 1px dashed var(--border2);
+  outline-offset: 4px;
+}
+.preset-locked input[type="range"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* ─── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 620px) {
   .compact-grid { grid-template-columns: 1fr; }

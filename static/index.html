@@ -77,6 +77,21 @@
     <div class="ob-step" id="step-3">
       <h2>Analysis profile <span class="optional">(optional)</span></h2>
       <p class="step-desc">Configure the rule-based signal engine. You can tune this later in Settings.</p>
+      <!-- Strategy Preset Picker -->
+      <div class="preset-section">
+        <div class="preset-select-row">
+          <label>Quick start with a preset</label>
+          <select id="ob-preset-select" onchange="loadStrategyPreset(this.value,'ob')">
+            <option value="">— Custom / Manual —</option>
+          </select>
+        </div>
+        <div id="ob-preset-info" class="preset-info-card" style="display:none"></div>
+        <div id="ob-preset-customize" class="preset-customize-bar" style="display:none">
+          <span class="preset-lock-msg">⚿ Sliders locked to preset</span>
+          <button class="btn-sm" onclick="customizePreset('ob')">Customize ✎</button>
+        </div>
+      </div>
+      <input type="hidden" id="ob-mom-days" value="10">
       <div class="profile-setup">
         <div class="profile-row">
           <label>Profile name</label>
@@ -100,7 +115,7 @@
         </div>
         <div class="profile-row">
           <label>Signal weights <span class="optional">(must add to 100%)</span></label>
-          <div class="sliders">
+          <div class="sliders" id="ob-sliders">
             <div class="slider-row">
               <span class="slider-lbl">MA Crossover</span>
               <input type="range" min="0" max="100" value="25" id="w-ma" oninput="rebalanceObWeight('ma',this.value)">
@@ -446,6 +461,17 @@
     <div class="settings-body" style="overflow-y:auto;max-height:calc(90vh - 60px)">
       <input type="hidden" id="pe-id">
       <div class="setting-group">
+        <label class="setting-label">STRATEGY PRESET</label>
+        <select id="pe-preset-select" onchange="loadStrategyPreset(this.value,'pe')">
+          <option value="">— Custom / Manual —</option>
+        </select>
+        <div id="pe-preset-info" class="preset-info-card" style="display:none;margin-top:8px"></div>
+        <div id="pe-preset-customize" class="preset-customize-bar" style="display:none">
+          <span class="preset-lock-msg">⚿ Sliders locked to preset</span>
+          <button class="btn-sm" onclick="customizePreset('pe')">Customize ✎</button>
+        </div>
+      </div>
+      <div class="setting-group">
         <label class="setting-label">NAME</label>
         <input type="text" id="pe-name" placeholder="Profile name..." class="text-input">
       </div>
@@ -467,7 +493,7 @@
       </div>
       <div class="setting-group">
         <label class="setting-label">SIGNAL WEIGHTS</label>
-        <div class="sliders">
+        <div class="sliders" id="pe-sliders">
           <div class="slider-row"><span class="slider-lbl">MA Crossover</span><input type="range" min="0" max="100" value="25" id="pe-w-ma"  oninput="rebalancePeWeight('ma', this.value)"><span class="slider-val" id="pe-w-ma-v">25%</span></div>
           <div class="slider-row"><span class="slider-lbl">Volume Spike</span><input type="range" min="0" max="100" value="25" id="pe-w-vol" oninput="rebalancePeWeight('vol',this.value)"><span class="slider-val" id="pe-w-vol-v">25%</span></div>
           <div class="slider-row"><span class="slider-lbl">RSI Signal</span>  <input type="range" min="0" max="100" value="25" id="pe-w-rsi" oninput="rebalancePeWeight('rsi',this.value)"><span class="slider-val" id="pe-w-rsi-v">25%</span></div>
