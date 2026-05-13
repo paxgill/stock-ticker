@@ -645,7 +645,7 @@
   <div class="modal-box modal-box-chart">
     <div class="modal-header chart-modal-header">
       <div class="modal-title" id="chart-modal-title">CHART</div>
-      <div class="chart-header-controls">
+      <div class="chart-header-controls" id="chart-header-controls">
         <div class="chart-range-tabs">
           <button class="chart-range-btn active" data-range="1W" onclick="setChartRange('1W',this)">1W</button>
           <button class="chart-range-btn" data-range="1M" onclick="setChartRange('1M',this)">1M</button>
@@ -662,14 +662,52 @@
       </div>
       <button class="modal-close" onclick="closeModal('chart-modal')">✕</button>
     </div>
-    <div id="chart-loading" class="chart-loading">
-      <div class="loading-spinner"></div><span>Loading chart data...</span>
+
+    <!-- Tab navigation -->
+    <div class="chart-tab-nav">
+      <button class="chart-tab-btn active" id="chart-tab-btn-chart" onclick="switchChartTab('chart')">📈 CHART</button>
+      <button class="chart-tab-btn" id="chart-tab-btn-options" onclick="switchChartTab('options')">📊 OPTIONS</button>
     </div>
-    <div id="chart-container" style="display:none">
-      <div id="plotly-chart"></div>
-      <div id="fundamentals-card" class="fundamentals-card"></div>
-      <div id="chart-news" class="chart-news-section"></div>
+
+    <!-- ── CHART TAB ─────────────────────────────────────────────── -->
+    <div id="chart-tab-chart">
+      <div id="chart-loading" class="chart-loading">
+        <div class="loading-spinner"></div><span>Loading chart data...</span>
+      </div>
+      <div id="chart-container" style="display:none">
+        <div id="plotly-chart"></div>
+        <div id="fundamentals-card" class="fundamentals-card"></div>
+        <div id="chart-news" class="chart-news-section"></div>
+      </div>
     </div>
+
+    <!-- ── OPTIONS TAB ───────────────────────────────────────────── -->
+    <div id="chart-tab-options" style="display:none">
+      <!-- Summary metrics bar -->
+      <div class="opt-summary-bar" id="opt-summary-bar">
+        <span class="opt-summary-item opt-summary-loading">Loading options data…</span>
+      </div>
+      <!-- Controls row: expiry picker + calls/puts toggle -->
+      <div class="opt-controls-row">
+        <label class="opt-label">Expiry</label>
+        <select id="opt-expiry-select" class="opt-select" onchange="onExpiryChange(this.value)">
+          <option>Loading…</option>
+        </select>
+        <div class="opt-side-toggle">
+          <button class="opt-side-btn active" id="opt-btn-calls" onclick="_setSide('calls')">Calls</button>
+          <button class="opt-side-btn" id="opt-btn-puts"  onclick="_setSide('puts')">Puts</button>
+        </div>
+      </div>
+      <!-- Chain table -->
+      <div class="opt-chain-wrap" id="opt-chain-wrap">
+        <div class="chart-loading"><div class="loading-spinner"></div><span>Loading chain…</span></div>
+      </div>
+      <!-- IV Smile chart -->
+      <div id="opt-iv-chart" class="opt-iv-chart"></div>
+      <!-- Disclaimer -->
+      <div class="opt-disclaimer">Options data via Yahoo Finance · Delayed · For educational use only · Not financial advice</div>
+    </div>
+
   </div>
 </div>
 

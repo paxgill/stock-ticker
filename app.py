@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import json
 import io
@@ -1405,6 +1406,161 @@ def correlation_matrix():
         "matrix":       corr.values.tolist(),
         "generated_at": datetime.now().isoformat(),
     })
+
+
+# ─── Options — Regex Validators ──────────────────────────────────────────────
+_TICKER_RE = re.compile(r'^[A-Z0-9.\-]{1,10}$')
+_EXPIRY_RE  = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+# ─── Options — Helper Functions ───────────────────────────────────────────────
+def _opt_float(val, default=None):
+    """Cast to float; return default on NaN / None / error."""
+    try:
+        f = float(val)
+        return default if (f != f) else f   # NaN check (f != f)
+    except (TypeError, ValueError):
+        return default
+
+
+def _opt_int(val, default=0):
+    """Cast to non-negative int; return default on error."""
+    try:
+        i = int(val)
+        return 0 if i < 0 else i
+    except (TypeError, ValueError):
+        return default
+
+
+def _chain_to_list(df):
+    """Convert yfinance option chain DataFrame to JSON-safe list of dicts."""
+    rows = []
+    for _, row in df.iterrows():
+        rows.append({
+            "strike":            _opt_float(row.get("strike")),
+            "lastPrice":         _opt_float(row.get("lastPrice")),
+            "bid":               _opt_float(row.get("bid")),
+            "ask":               _opt_float(row.get("ask")),
+            "volume":            _opt_int(row.get("volume")),
+            "openInterest":      _opt_int(row.get("openInterest")),
+            "impliedVolatility": _opt_float(row.get("impliedVolatility")),
+            "inTheMoney":        bool(row.get("inTheMoney", False)),
+        })
+    return rows
+
+
+def _calc_max_pain(calls_df, puts_df):
+    """Return the strike that minimises total intrinsic value of all open options."""
+    try:
+        strikes = sorted(set(
+            calls_df["strike"].dropna().tolist() +
+            puts_df["strike"].dropna().tolist()
+        ))
+        if not strikes:
+            return None
+        min_pain    = float("inf")
+        pain_strike = None
+        for s in strikes:
+            call_pain = sum(
+                max(0.0, s - float(k)) * float(oi)
+                for k, oi in zip(calls_df["strike"], calls_df["openInterest"])
+                if _opt_float(k) is not None and _opt_int(oi) > 0
+            )
+            put_pain = sum(
+                max(0.0, float(k) - s) * float(oi)
+                for k, oi in zip(puts_df["strike"], puts_df["openInterest"])
+                if _opt_float(k) is not None and _opt_int(oi) > 0
+            )
+            total = call_pain + put_pain
+            if total < min_pain:
+                min_pain    = total
+                pain_strike = s
+        return round(pain_strike, 2) if pain_strike is not None else None
+    except Exception:
+        return None
+
+
+# ─── Options Routes ───────────────────────────────────────────────────────────
+@app.route("/api/options/expirations/<ticker>")
+def options_expirations(ticker):
+    """Return list of available expiration date strings for a ticker."""
+    ticker = ticker.upper()
+    if not _TICKER_RE.match(ticker):
+        return jsonify({"error": "Invalid ticker"}), 400
+    try:
+        t    = yf.Ticker(ticker)
+        exps = list(t.options)
+        return jsonify({"ticker": ticker, "expirations": exps})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/options/chain/<ticker>/<expiration>")
+def options_chain(ticker, expiration):
+    """Return calls + puts for a specific expiration."""
+    ticker = ticker.upper()
+    if not _TICKER_RE.match(ticker):
+        return jsonify({"error": "Invalid ticker"}), 400
+    if not _EXPIRY_RE.match(expiration):
+        return jsonify({"error": "Invalid expiration date format (YYYY-MM-DD)"}), 400
+    try:
+        t     = yf.Ticker(ticker)
+        chain = t.option_chain(expiration)
+        return jsonify({
+            "ticker":     ticker,
+            "expiration": expiration,
+            "calls":      _chain_to_list(chain.calls),
+            "puts":       _chain_to_list(chain.puts),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/options/summary/<ticker>")
+def options_summary(ticker):
+    """Put/Call ratio, max pain, and total call/put OI across nearest 8 expiries."""
+    ticker = ticker.upper()
+    if not _TICKER_RE.match(ticker):
+        return jsonify({"error": "Invalid ticker"}), 400
+    try:
+        t    = yf.Ticker(ticker)
+        exps = list(t.options)
+        if not exps:
+            return jsonify({"error": "No options data available"}), 404
+
+        total_call_oi = 0
+        total_put_oi  = 0
+        all_calls     = []
+        all_puts      = []
+
+        for exp in exps[:8]:        # limit to nearest 8 expiries for speed
+            try:
+                chain          = t.option_chain(exp)
+                total_call_oi += int(chain.calls["openInterest"].fillna(0).sum())
+                total_put_oi  += int(chain.puts["openInterest"].fillna(0).sum())
+                all_calls.append(chain.calls)
+                all_puts.append(chain.puts)
+            except Exception:
+                continue
+
+        pc_ratio = (round(total_put_oi / total_call_oi, 3)
+                    if total_call_oi > 0 else None)
+
+        # Max pain calculated on the nearest expiry only
+        max_pain = None
+        if all_calls and all_puts:
+            max_pain = _calc_max_pain(all_calls[0], all_puts[0])
+
+        return jsonify({
+            "ticker":         ticker,
+            "put_call_ratio": pc_ratio,
+            "max_pain":       max_pain,
+            "total_call_oi":  total_call_oi,
+            "total_put_oi":   total_put_oi,
+            "expirations":    exps,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

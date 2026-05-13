@@ -1997,6 +1997,7 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 function closeModalOverlay(e, id) { if (e.target === document.getElementById(id)) closeModal(id); }
 
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // INTERACTIVE CHART
 // ════════════════════════════════════════════════════════════════
 let currentChartSymbol = null;
@@ -2022,9 +2023,13 @@ async function openChart(symbol) {
     b.classList.toggle('active', b.dataset.range === '1Y');
   });
 
+  // Always open on chart tab; prepare options tab in background
+  switchChartTab('chart');
+
   openModal('chart-modal');
   await loadChartData(symbol, '1Y');
-  loadChartNews(symbol);  // fire-and-forget
+  loadChartNews(symbol);      // fire-and-forget
+  initOptions(symbol);        // fire-and-forget (pre-load expirations + summary)
 }
 
 async function loadChartData(symbol, range) {
@@ -2654,3 +2659,330 @@ async function loadChartNews(symbol) {
     // Silently fail — news is supplementary
   }
 }
+
+// ════════════════════════════════════════════════════════════════
+// OPTIONS CHAIN
+// ════════════════════════════════════════════════════════════════
+let _optCache       = {};   // key: `${sym}|${expiry}` → { ts, data }
+let _optSide        = 'calls';
+let _optSortCol     = 'strike';
+let _optSortDir     = 'asc';
+let _optCurrentExpiry = null;
+let _optCurrentChain  = null;   // { calls:[], puts:[] }
+
+const OPT_CACHE_MS  = 2 * 60 * 1000;   // 2-minute TTL
+
+// ── Tab switcher ─────────────────────────────────────────────────────────────
+function switchChartTab(tab) {
+  const isChart   = tab === 'chart';
+  document.getElementById('chart-tab-chart').style.display   = isChart ? '' : 'none';
+  document.getElementById('chart-tab-options').style.display = isChart ? 'none' : '';
+
+  document.getElementById('chart-tab-btn-chart').classList.toggle('active', isChart);
+  document.getElementById('chart-tab-btn-options').classList.toggle('active', !isChart);
+
+  // Show/hide chart-specific header controls (range, MA toggles, reset)
+  const ctrl = document.getElementById('chart-header-controls');
+  if (ctrl) ctrl.style.display = isChart ? '' : 'none';
+}
+
+// ── Bootstrap: load expirations + summary in background ──────────────────────
+async function initOptions(symbol) {
+  // Reset UI
+  const sel = document.getElementById('opt-expiry-select');
+  if (sel) { sel.innerHTML = '<option>Loading…</option>'; sel.disabled = true; }
+  const sumBar = document.getElementById('opt-summary-bar');
+  if (sumBar) sumBar.innerHTML = '<span class="opt-summary-item opt-summary-loading">Loading options data…</span>';
+  _optCurrentChain  = null;
+  _optCurrentExpiry = null;
+
+  // Parallel: fetch expirations + summary
+  const [expirations, summary] = await Promise.all([
+    _fetchExpirations(symbol),
+    _fetchOptionsSummary(symbol),
+  ]);
+
+  // Populate expiry dropdown
+  if (sel) {
+    sel.innerHTML = '';
+    if (!expirations || !expirations.length) {
+      sel.innerHTML = '<option>No options available</option>';
+      sel.disabled = true;
+    } else {
+      expirations.forEach(exp => {
+        const opt = document.createElement('option');
+        opt.value       = exp;
+        opt.textContent = exp;
+        sel.appendChild(opt);
+      });
+      sel.disabled = false;
+      _optCurrentExpiry = expirations[0];
+    }
+  }
+
+  // Render summary bar
+  _renderSummaryBar(summary);
+
+  // Pre-load the first expiry chain in background
+  if (_optCurrentExpiry) {
+    _fetchOptionsChain(symbol, _optCurrentExpiry).then(chain => {
+      _optCurrentChain = chain;
+      // Only render if OPTIONS tab is currently active
+      if (document.getElementById('chart-tab-options').style.display !== 'none') {
+        _renderChainTable(chain ? chain[_optSide] : null);
+        if (chain) _renderIVSmile(chain.calls, chain.puts, _optCurrentExpiry);
+      }
+    });
+  }
+}
+
+// ── Fetch helpers ─────────────────────────────────────────────────────────────
+async function _fetchExpirations(symbol) {
+  try {
+    const data = await api.get(`/api/options/expirations/${encodeURIComponent(symbol)}`);
+    return data.expirations || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function _fetchOptionsSummary(symbol) {
+  try {
+    return await api.get(`/api/options/summary/${encodeURIComponent(symbol)}`);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function _fetchOptionsChain(symbol, expiry) {
+  const cacheKey = `${symbol}|${expiry}`;
+  const cached   = _optCache[cacheKey];
+  if (cached && (Date.now() - cached.ts) < OPT_CACHE_MS) {
+    return cached.data;
+  }
+  try {
+    const data = await api.get(
+      `/api/options/chain/${encodeURIComponent(symbol)}/${encodeURIComponent(expiry)}`
+    );
+    _optCache[cacheKey] = { ts: Date.now(), data };
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ── Summary bar renderer ──────────────────────────────────────────────────────
+function _renderSummaryBar(summary) {
+  const bar = document.getElementById('opt-summary-bar');
+  if (!bar) return;
+  if (!summary || summary.error) {
+    bar.innerHTML = '<span class="opt-summary-item opt-summary-na">Options data unavailable</span>';
+    return;
+  }
+
+  const fmtOI = v => {
+    if (v == null) return '—';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+    return v.toString();
+  };
+  const pcr = summary.put_call_ratio;
+  const pcrColor = pcr == null ? '' :
+    pcr > 1.2 ? 'opt-val-red' : pcr < 0.8 ? 'opt-val-green' : '';
+
+  bar.innerHTML = `
+    <span class="opt-summary-item">
+      <span class="opt-summary-label">P/C Ratio</span>
+      <span class="opt-summary-val ${pcrColor}">${pcr != null ? pcr.toFixed(2) : '—'}</span>
+    </span>
+    <span class="opt-summary-sep">|</span>
+    <span class="opt-summary-item">
+      <span class="opt-summary-label">Max Pain</span>
+      <span class="opt-summary-val">${summary.max_pain != null ? '$' + summary.max_pain.toFixed(2) : '—'}</span>
+    </span>
+    <span class="opt-summary-sep">|</span>
+    <span class="opt-summary-item">
+      <span class="opt-summary-label">Call OI</span>
+      <span class="opt-summary-val opt-val-green">${fmtOI(summary.total_call_oi)}</span>
+    </span>
+    <span class="opt-summary-sep">|</span>
+    <span class="opt-summary-item">
+      <span class="opt-summary-label">Put OI</span>
+      <span class="opt-summary-val opt-val-red">${fmtOI(summary.total_put_oi)}</span>
+    </span>`;
+}
+
+// ── Expiry change handler ────────────────────────────────────────────────────
+async function onExpiryChange(expiry) {
+  _optCurrentExpiry = expiry;
+  const wrap = document.getElementById('opt-chain-wrap');
+  if (wrap) wrap.innerHTML = '<div class="chart-loading"><div class="loading-spinner"></div><span>Loading chain…</span></div>';
+
+  const chain = await _fetchOptionsChain(currentChartSymbol, expiry);
+  _optCurrentChain = chain;
+  _renderChainTable(chain ? chain[_optSide] : null);
+  if (chain) _renderIVSmile(chain.calls, chain.puts, expiry);
+}
+
+// ── Side toggle ──────────────────────────────────────────────────────────────
+function _setSide(side) {
+  _optSide = side;
+  document.getElementById('opt-btn-calls').classList.toggle('active', side === 'calls');
+  document.getElementById('opt-btn-puts').classList.toggle('active', side === 'puts');
+  if (_optCurrentChain) {
+    _renderChainTable(_optCurrentChain[side]);
+  }
+}
+
+// ── Sort helpers ─────────────────────────────────────────────────────────────
+function _setSort(col) {
+  if (_optSortCol === col) {
+    _optSortDir = _optSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _optSortCol = col;
+    _optSortDir = col === 'strike' ? 'asc' : 'desc';
+  }
+  if (_optCurrentChain) {
+    _renderChainTable(_optCurrentChain[_optSide]);
+  }
+}
+
+function _sortChain(rows, col, dir) {
+  return [...rows].sort((a, b) => {
+    const av = a[col] ?? (col === 'strike' ? Infinity : -Infinity);
+    const bv = b[col] ?? (col === 'strike' ? Infinity : -Infinity);
+    return dir === 'asc' ? av - bv : bv - av;
+  });
+}
+
+// ── Chain table renderer ─────────────────────────────────────────────────────
+function _renderChainTable(rows) {
+  const wrap = document.getElementById('opt-chain-wrap');
+  if (!wrap) return;
+
+  if (!rows || !rows.length) {
+    wrap.innerHTML = '<div class="opt-empty">No data for this expiry / side.</div>';
+    return;
+  }
+
+  const sorted = _sortChain(rows, _optSortCol, _optSortDir);
+  const f2  = v => (v != null ? v.toFixed(2) : '—');
+  const fOI = v => (v != null && v > 0 ? v.toLocaleString() : '—');
+  const fIV = v => (v != null ? (v * 100).toFixed(1) + '%' : '—');
+
+  const sortIcon = col =>
+    _optSortCol === col
+      ? (_optSortDir === 'asc' ? ' ▲' : ' ▼')
+      : ' ⇅';
+
+  const cols = [
+    { key: 'strike',            label: 'Strike'  },
+    { key: 'lastPrice',         label: 'Last'    },
+    { key: 'bid',               label: 'Bid'     },
+    { key: 'ask',               label: 'Ask'     },
+    { key: 'volume',            label: 'Volume'  },
+    { key: 'openInterest',      label: 'OI'      },
+    { key: 'impliedVolatility', label: 'IV'      },
+  ];
+
+  const headerHtml = cols.map(c =>
+    `<th class="opt-th opt-th-sort" onclick="_setSort('${c.key}')">${esc(c.label)}${sortIcon(c.key)}</th>`
+  ).join('');
+
+  const rowsHtml = sorted.map(r => {
+    const itm   = r.inTheMoney ? ' opt-itm' : '';
+    const ivPct = r.impliedVolatility != null ? r.impliedVolatility * 100 : null;
+    const ivCls = ivPct == null ? '' : ivPct > 60 ? ' opt-iv-hot' : ivPct > 30 ? ' opt-iv-warm' : '';
+    return `<tr class="opt-row${itm}">
+      <td class="opt-td opt-strike${itm}">${f2(r.strike)}</td>
+      <td class="opt-td">${f2(r.lastPrice)}</td>
+      <td class="opt-td">${f2(r.bid)}</td>
+      <td class="opt-td">${f2(r.ask)}</td>
+      <td class="opt-td">${fOI(r.volume)}</td>
+      <td class="opt-td">${fOI(r.openInterest)}</td>
+      <td class="opt-td${ivCls}">${fIV(r.impliedVolatility)}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="opt-itm-legend">
+      <span class="opt-itm-dot"></span><span>In-the-money</span>
+    </div>
+    <div class="opt-table-scroll">
+      <table class="opt-table">
+        <thead><tr>${headerHtml}</tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+
+// ── IV Smile chart (Plotly) ──────────────────────────────────────────────────
+function _renderIVSmile(calls, puts, expiry) {
+  const el = document.getElementById('opt-iv-chart');
+  if (!el) return;
+
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  const bg     = isDark ? '#0a0a0b' : '#f5f5f7';
+  const plotBg = isDark ? '#111114' : '#ffffff';
+  const gridC  = isDark ? '#1e1e26' : '#e4e4ea';
+  const fontC  = isDark ? '#9898a8' : '#48484f';
+
+  const validCalls = (calls || []).filter(r => r.strike != null && r.impliedVolatility != null);
+  const validPuts  = (puts  || []).filter(r => r.strike != null && r.impliedVolatility != null);
+
+  if (!validCalls.length && !validPuts.length) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+
+  const mkTrace = (rows, name, color) => ({
+    type: 'scatter',
+    mode: 'lines+markers',
+    x: rows.map(r => r.strike),
+    y: rows.map(r => parseFloat((r.impliedVolatility * 100).toFixed(2))),
+    name,
+    line:   { color, width: 2 },
+    marker: { color, size: 4 },
+    hovertemplate: `Strike: $%{x}<br>IV: %{y:.1f}%<extra>${esc(name)}</extra>`,
+  });
+
+  const traces = [];
+  if (validCalls.length) traces.push(mkTrace(validCalls, 'Calls IV', '#00e676'));
+  if (validPuts.length)  traces.push(mkTrace(validPuts,  'Puts IV',  '#ff5252'));
+
+  const layout = {
+    paper_bgcolor: bg,
+    plot_bgcolor:  plotBg,
+    font:   { family: 'JetBrains Mono, monospace', color: fontC, size: 10 },
+    margin: { l: 10, r: 60, t: 28, b: 36 },
+    height: 200,
+    title:  { text: `IV Smile — ${esc(expiry)}`, font: { size: 11, color: fontC }, x: 0.01 },
+    xaxis:  { title: { text: 'Strike', font: { size: 10 } }, gridcolor: gridC, color: fontC, tickprefix: '$' },
+    yaxis:  { title: { text: 'IV %', font: { size: 10 } }, gridcolor: gridC, color: fontC, side: 'right', ticksuffix: '%' },
+    legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0)', font: { size: 10 } },
+    hovermode: 'x unified',
+    hoverlabel: { bgcolor: isDark ? '#18181d' : '#ffffff', bordercolor: gridC,
+                  font: { family: 'JetBrains Mono, monospace', size: 11 } },
+  };
+
+  Plotly.newPlot('opt-iv-chart', traces, layout, {
+    responsive: true,
+    displayModeBar: false,
+    scrollZoom: false,
+  });
+}
+
+// ── Handle chart tab click when options tab is active (lazy render) ───────────
+// Ensures the chain table shows if user switches back to options tab manually
+document.addEventListener('DOMContentLoaded', () => {
+  const optBtn = document.getElementById('chart-tab-btn-options');
+  if (optBtn) {
+    optBtn.addEventListener('click', () => {
+      if (_optCurrentChain) {
+        _renderChainTable(_optCurrentChain[_optSide]);
+        _renderIVSmile(_optCurrentChain.calls, _optCurrentChain.puts, _optCurrentExpiry);
+      }
+    });
+  }
+});
