@@ -18,6 +18,7 @@ const S = {
   theme: localStorage.getItem('pg_theme') || 'dark',
   strategyPresets: [],
   presetLocked: { ob: false, pe: false },
+  quizAnswers: [null, null, null, null, null],
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -1249,6 +1250,291 @@ const PRESET_TYPE_SLUG = {
   'TAA':            'taa',
   'Volatility':     'volatility',
 };
+
+// ── Quiz data ────────────────────────────────────────────────────
+const QUIZ_QUESTIONS = [
+  {
+    q: 'How often do you want to trade?',
+    hint: 'Think about how many buy or sell decisions you want to make per month.',
+    options: [
+      { id: 'a', text: 'Daily or several times per week' },
+      { id: 'b', text: 'Every 1–2 weeks' },
+      { id: 'c', text: 'Once a month or less' },
+      { id: 'd', text: 'Set it and forget it (quarterly rebalance)' },
+    ],
+  },
+  {
+    q: "What's your comfort level with losses?",
+    hint: 'A "drawdown" is a temporary drop from a portfolio\'s peak — it always happens in investing.',
+    options: [
+      { id: 'a', text: 'I can handle 30%+ drops — bigger risk, bigger reward' },
+      { id: 'b', text: "I'm OK with 15–25% dips" },
+      { id: 'c', text: 'I prefer small, steady gains with less than 15% max loss' },
+      { id: 'd', text: 'I want near-bond-like stability, minimal volatility' },
+    ],
+  },
+  {
+    q: 'What trading style appeals to you most?',
+    hint: "There's no right answer — just pick what excites you.",
+    options: [
+      { id: 'a', text: 'Riding big, multi-month uptrends' },
+      { id: 'b', text: 'Buying dips and selling bounces (mean reversion)' },
+      { id: 'c', text: 'Exploiting predictable patterns like earnings or month-end effects' },
+      { id: 'd', text: 'Diversifying across assets and letting math manage risk' },
+    ],
+  },
+  {
+    q: 'How much time can you dedicate to monitoring your trades?',
+    hint: "Be honest — many strategies fail because traders can't follow their own rules.",
+    options: [
+      { id: 'a', text: 'I check the market every day' },
+      { id: 'b', text: 'A few times per week' },
+      { id: 'c', text: 'About once a week' },
+      { id: 'd', text: 'Monthly or less' },
+    ],
+  },
+  {
+    q: 'How familiar are you with technical indicators?',
+    hint: 'Examples include RSI, moving averages, ATR, and Bollinger Bands.',
+    options: [
+      { id: 'a', text: "Expert — I'm comfortable reading charts and indicators" },
+      { id: 'b', text: 'Intermediate — I understand the basics' },
+      { id: 'c', text: 'Beginner — not much, keep it simple' },
+      { id: 'd', text: "None — I just want clear buy/sell signals" },
+    ],
+  },
+];
+
+// Scoring: QUIZ_SCORING[questionIndex][answerId] = { strategyName: points }
+const QUIZ_SCORING = [
+  // Q1 — trading frequency
+  {
+    a: { 'RSI Mean Reversion': 3, 'High Frequency Scalp': 3, 'Oversold Bounce': 2, 'Volatility Filter': 2, 'Earnings Season': 1 },
+    b: { 'Momentum Surfer': 3, 'Swing Trader': 3, 'Volume Breakout': 2, 'Golden Cross Hunter': 2, 'Trend Following': 1 },
+    c: { 'Sector Rotation': 3, 'Conservative Long-Term': 3, 'Tactical Asset Allocation': 2, 'Golden Cross Hunter': 1 },
+    d: { 'Tactical Asset Allocation': 3, 'Conservative Long-Term': 3, 'Classic Balanced': 2, 'Sector Rotation': 1 },
+  },
+  // Q2 — loss comfort
+  {
+    a: { 'High Frequency Scalp': 3, 'Volume Breakout': 2, 'Volatility Filter': 2, 'Momentum Surfer': 2, 'Earnings Season': 1 },
+    b: { 'Momentum Surfer': 3, 'Swing Trader': 3, 'Trend Following': 2, 'Golden Cross Hunter': 2, 'Volume Breakout': 1 },
+    c: { 'Oversold Bounce': 3, 'RSI Mean Reversion': 3, 'Earnings Season': 2, 'Classic Balanced': 1, 'Tactical Asset Allocation': 1 },
+    d: { 'Conservative Long-Term': 3, 'Tactical Asset Allocation': 3, 'Sector Rotation': 1, 'Classic Balanced': 1 },
+  },
+  // Q3 — trading style
+  {
+    a: { 'Volume Breakout': 3, 'Momentum Surfer': 3, 'Trend Following': 3, 'Golden Cross Hunter': 2, 'Swing Trader': 1 },
+    b: { 'RSI Mean Reversion': 3, 'Oversold Bounce': 3, 'High Frequency Scalp': 2, 'Volatility Filter': 1 },
+    c: { 'Earnings Season': 3, 'Sector Rotation': 3, 'Classic Balanced': 1 },
+    d: { 'Conservative Long-Term': 3, 'Tactical Asset Allocation': 3, 'Sector Rotation': 2 },
+  },
+  // Q4 — time commitment
+  {
+    a: { 'RSI Mean Reversion': 3, 'High Frequency Scalp': 3, 'Volatility Filter': 2, 'Oversold Bounce': 2, 'Earnings Season': 1 },
+    b: { 'Momentum Surfer': 2, 'Swing Trader': 2, 'Golden Cross Hunter': 2, 'Volume Breakout': 2, 'Trend Following': 1 },
+    c: { 'Classic Balanced': 3, 'Swing Trader': 1, 'Trend Following': 1, 'Golden Cross Hunter': 1 },
+    d: { 'Sector Rotation': 3, 'Conservative Long-Term': 3, 'Tactical Asset Allocation': 3, 'Classic Balanced': 1 },
+  },
+  // Q5 — technical knowledge
+  {
+    a: { 'RSI Mean Reversion': 2, 'High Frequency Scalp': 2, 'Volatility Filter': 2, 'Golden Cross Hunter': 1, 'Earnings Season': 1 },
+    b: { 'Momentum Surfer': 1, 'Swing Trader': 1, 'Trend Following': 1, 'Volume Breakout': 1, 'Oversold Bounce': 1 },
+    c: { 'Classic Balanced': 2, 'Sector Rotation': 1, 'Oversold Bounce': 1, 'Conservative Long-Term': 1, 'Tactical Asset Allocation': 1 },
+    d: { 'Conservative Long-Term': 2, 'Tactical Asset Allocation': 2, 'Classic Balanced': 2, 'Sector Rotation': 1 },
+  },
+];
+
+// Pre-computed theoretical max score for each strategy (sum of max per question)
+const QUIZ_MAX_SCORES = {
+  'Classic Balanced':        9,
+  'Golden Cross Hunter':     9,
+  'Swing Trader':           10,
+  'Trend Following':         8,
+  'Momentum Surfer':        12,
+  'Volume Breakout':        10,
+  'RSI Mean Reversion':     14,
+  'Oversold Bounce':        11,
+  'Earnings Season':         8,
+  'Sector Rotation':        11,
+  'Conservative Long-Term': 14,
+  'Tactical Asset Allocation': 14,
+  'High Frequency Scalp':   13,
+  'Volatility Filter':       9,
+};
+
+// Module-level quiz state (UI only — not user data)
+let _quizStep = 0;
+let _quizContext = 'ob';
+let _quizKeyBound = false;
+
+function openStrategyQuiz(ctx) {
+  _quizContext = ctx || 'ob';
+  _quizStep = 0;
+  S.quizAnswers = [null, null, null, null, null];
+  _renderQuizQuestion(0);
+  openModal('strategy-quiz-modal');
+  if (!_quizKeyBound) {
+    document.addEventListener('keydown', _quizKeyHandler);
+    _quizKeyBound = true;
+  }
+}
+
+function closeStrategyQuiz() {
+  closeModal('strategy-quiz-modal');
+  document.removeEventListener('keydown', _quizKeyHandler);
+  _quizKeyBound = false;
+}
+
+function _quizKeyHandler(e) {
+  if (!document.getElementById('strategy-quiz-modal')?.classList.contains('open')) return;
+  if (_quizStep >= QUIZ_QUESTIONS.length) return;   // on results screen — no keyboard nav
+
+  const opts = [...document.querySelectorAll('.quiz-option input[type="radio"]')];
+  const currentIdx = opts.findIndex(r => r.checked);
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const next = opts[Math.min(currentIdx + 1, opts.length - 1)];
+    if (next) { next.click(); next.closest('.quiz-option').classList.add('selected'); }
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    e.preventDefault();
+    const prev = opts[Math.max(currentIdx - 1, 0)];
+    if (prev) { prev.click(); prev.closest('.quiz-option').classList.add('selected'); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    nextQuizQuestion();
+  }
+}
+
+function _renderQuizQuestion(n) {
+  const total = QUIZ_QUESTIONS.length;
+  const q = QUIZ_QUESTIONS[n];
+  const pct = Math.round((n / total) * 100);
+  const saved = S.quizAnswers[n];
+  document.getElementById('quiz-body').innerHTML = `
+    <div>
+      <div class="quiz-progress-label">QUESTION ${n + 1} OF ${total}</div>
+      <div class="quiz-progress-track"><div class="quiz-progress-fill" style="width:${pct}%"></div></div>
+    </div>
+    <div>
+      <p class="quiz-q-text">${esc(q.q)}</p>
+      ${q.hint ? `<p class="quiz-q-hint">${esc(q.hint)}</p>` : ''}
+    </div>
+    <div class="quiz-options">
+      ${q.options.map(opt => `
+        <label class="quiz-option${saved === opt.id ? ' selected' : ''}">
+          <input type="radio" name="quiz-q${n}" value="${opt.id}" ${saved === opt.id ? 'checked' : ''}
+            onchange="S.quizAnswers[${n}]='${opt.id}';document.querySelectorAll('.quiz-option').forEach(el=>el.classList.toggle('selected',el.querySelector('input').checked))">
+          <div class="quiz-option-inner">
+            <div class="quiz-option-dot"></div>
+            <span class="quiz-option-text">${esc(opt.text)}</span>
+          </div>
+        </label>`).join('')}
+    </div>
+    <div class="quiz-nav">
+      ${n > 0 ? `<button class="btn-ghost" onclick="prevQuizQuestion()">← BACK</button>` : '<div></div>'}
+      <button class="btn-primary" onclick="nextQuizQuestion()">
+        ${n < total - 1 ? 'NEXT →' : 'SHOW RESULTS →'}
+      </button>
+    </div>
+  `;
+}
+
+function nextQuizQuestion() {
+  const n = _quizStep;
+  const selected = document.querySelector(`[name="quiz-q${n}"]:checked`);
+  if (!selected) { showToast('Please select an answer to continue.', 'error'); return; }
+  S.quizAnswers[n] = selected.value;
+  if (n < QUIZ_QUESTIONS.length - 1) {
+    _quizStep = n + 1;
+    _renderQuizQuestion(_quizStep);
+  } else {
+    _quizStep = QUIZ_QUESTIONS.length;  // signals results screen
+    _renderQuizResults();
+  }
+}
+
+function prevQuizQuestion() {
+  if (_quizStep > 0) { _quizStep--; _renderQuizQuestion(_quizStep); }
+}
+
+function calculateQuizResults() {
+  const scores = {};
+  S.strategyPresets.forEach(p => { scores[p.name] = 0; });
+  S.quizAnswers.forEach((answer, qIdx) => {
+    if (!answer || !QUIZ_SCORING[qIdx]) return;
+    Object.entries(QUIZ_SCORING[qIdx][answer] || {}).forEach(([name, pts]) => {
+      if (scores[name] !== undefined) scores[name] += pts;
+    });
+  });
+  return Object.entries(scores)
+    .map(([name, score]) => {
+      const maxS = QUIZ_MAX_SCORES[name] || 1;
+      const matchPct = Math.min(99, Math.round(score / maxS * 100));
+      return { name, score, matchPct };
+    })
+    .sort((a, b) => b.matchPct - a.matchPct || b.score - a.score);
+}
+
+function _renderQuizResults() {
+  if (!S.strategyPresets.length) {
+    document.getElementById('quiz-body').innerHTML =
+      '<p style="padding:20px;color:var(--text2)">Strategies could not be loaded. Please refresh and try again.</p>';
+    return;
+  }
+  const top3 = calculateQuizResults().slice(0, 3);
+  document.getElementById('quiz-body').innerHTML = `
+    <div class="quiz-results-header">
+      <p class="quiz-results-subtitle">Based on your answers, here are your best strategy matches.</p>
+    </div>
+    <div class="quiz-results">
+      ${top3.map((r, i) => {
+        const preset  = S.strategyPresets.find(p => p.name === r.name);
+        const pctColor = r.matchPct >= 85 ? 'var(--green)' : r.matchPct >= 65 ? 'var(--yellow)' : 'var(--text2)';
+        const typeColor = PRESET_TYPE_COLORS[preset?.type] || '#888';
+        return `
+          <div class="result-card ${i === 0 ? 'result-card-top' : ''}">
+            <div class="result-card-header">
+              <span class="result-match-pct" style="color:${pctColor}">${r.matchPct}% match</span>
+              <span class="pic-type-badge" style="background:${typeColor}22;color:${typeColor};border-color:${typeColor}55">${esc(preset?.type || '')}</span>
+              <span class="pic-meta">⚙ ${esc(preset?.complexity || '')}</span>
+            </div>
+            <div class="result-name">${esc(r.name)}</div>
+            <p class="result-desc">${esc(preset?.description || '')}</p>
+            <button class="btn-primary result-btn"
+              data-strategy-name="${esc(r.name)}"
+              onclick="loadQuizStrategy(this.getAttribute('data-strategy-name'))">
+              Load This Strategy
+            </button>
+          </div>`;
+      }).join('')}
+    </div>
+    <div class="quiz-results-footer">
+      <button class="btn-ghost" onclick="openStrategyQuiz(_quizContext)">↺ Take Quiz Again</button>
+      <button class="btn-ghost" onclick="closeStrategyQuiz()">CLOSE</button>
+    </div>
+  `;
+}
+
+function loadQuizStrategy(name) {
+  const ctx = _quizContext;
+  closeStrategyQuiz();
+  if (ctx === 'pe') {
+    // Open the profile editor for a new profile, then apply the preset
+    openProfileEditor(null);
+    setTimeout(() => {
+      const sel = document.getElementById('pe-preset-select');
+      if (sel) sel.value = name;
+      loadStrategyPreset(name, 'pe');
+    }, 50);
+  } else {
+    // Onboarding — set dropdown and apply
+    const sel = document.getElementById('ob-preset-select');
+    if (sel) sel.value = name;
+    loadStrategyPreset(name, 'ob');
+  }
+  showToast(`"${name}" preset loaded.`, 'success');
+}
 
 function loadStrategyPreset(name, ctx) {
   const infoId = ctx === 'ob' ? 'ob-preset-info' : 'pe-preset-info';

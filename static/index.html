@@ -90,6 +90,10 @@
           <span class="preset-lock-msg">⚿ Sliders locked to preset</span>
           <button class="btn-sm" onclick="customizePreset('ob')">Customize ✎</button>
         </div>
+        <div class="quiz-launcher-row">
+          <span>Not sure which to pick?</span>
+          <button class="btn-link" onclick="openStrategyQuiz('ob')">▶ Take the 5-question quiz</button>
+        </div>
       </div>
       <input type="hidden" id="ob-mom-days" value="10">
       <div class="profile-setup">
@@ -426,7 +430,10 @@
     <!-- Profiles -->
     <div id="stab-profiles" class="stab-content settings-body">
       <div class="profiles-list" id="profiles-list"></div>
-      <button class="btn-primary" style="margin-top:12px" onclick="openProfileEditor(null)">+ NEW PROFILE</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn-primary" onclick="openProfileEditor(null)">+ NEW PROFILE</button>
+        <button class="btn-ghost" onclick="openStrategyQuiz('pe')">▶ Find My Strategy (Quiz)</button>
+      </div>
     </div>
     <!-- Alerts -->
     <div id="stab-alerts" class="stab-content settings-body">
@@ -667,5 +674,19 @@
 </div>
 
 <script src="app.js"></script>
+<!-- Strategy Quiz Modal -->
+<div id="strategy-quiz-modal" class="modal-overlay" onclick="closeModalOverlay(event,'strategy-quiz-modal')">
+  <div class="modal-box modal-box-med">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">FIND YOUR STRATEGY</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">5 quick questions — no finance knowledge required.</div>
+      </div>
+      <button class="modal-close" onclick="closeStrategyQuiz()">✕</button>
+    </div>
+    <div id="quiz-body" class="quiz-body"></div>
+  </div>
+</div>
+
 </body>
 </html>
