@@ -2979,10 +2979,456 @@ document.addEventListener('DOMContentLoaded', () => {
   const optBtn = document.getElementById('chart-tab-btn-options');
   if (optBtn) {
     optBtn.addEventListener('click', () => {
-      if (_optCurrentChain) {
+      // Only re-render chain if the CHAIN subtab is currently active
+      const chainTab = document.getElementById('opt-subtab-chain');
+      if (chainTab && chainTab.style.display !== 'none' && _optCurrentChain) {
         _renderChainTable(_optCurrentChain[_optSide]);
         _renderIVSmile(_optCurrentChain.calls, _optCurrentChain.puts, _optCurrentExpiry);
       }
     });
   }
+
+  // Register options quiz keyboard handler (always active; checked by display state)
+  document.addEventListener('keydown', _optQuizKeyHandler);
 });
+
+// ════════════════════════════════════════════════════════════════
+// OPTIONS STRATEGIES — browser + questionnaire engine
+// ════════════════════════════════════════════════════════════════
+
+// Type → hex color (Income=blue, Directional=green, Volatility=orange, Hedging=purple, Arbitrage=yellow)
+const OPT_STRATEGY_TYPE_COLORS = {
+  'Income':      '#3b82f6',
+  'Directional': '#22c55e',
+  'Volatility':  '#f97316',
+  'Hedging':     '#a855f7',
+  'Arbitrage':   '#eab308',
+};
+
+let _osFilterActive = 'All';
+
+// ── Options subtab switcher ───────────────────────────────────────────────────
+function switchOptSubtab(tab) {
+  ['chain', 'strategies', 'quiz'].forEach(t => {
+    const el  = document.getElementById(`opt-subtab-${t}`);
+    const btn = document.getElementById(`opt-subtab-btn-${t}`);
+    if (el)  el.style.display = t === tab ? 'flex' : 'none';
+    if (btn) btn.classList.toggle('active', t === tab);
+  });
+  if (tab === 'strategies') renderOptStrategyGrid(_osFilterActive);
+  if (tab === 'quiz') {
+    if (_optQuizStep < OPT_QUIZ_QUESTIONS.length) _renderOptQuizQuestion(_optQuizStep);
+    else _renderOptQuizResults();
+  }
+}
+
+// ── Strategy grid ─────────────────────────────────────────────────────────────
+function filterOptStrategies(type) {
+  _osFilterActive = type;
+  document.querySelectorAll('.os-filter-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === type)
+  );
+  renderOptStrategyGrid(type);
+}
+
+function renderOptStrategyGrid(type) {
+  const grid = document.getElementById('os-strategy-grid');
+  if (!grid) return;
+  const list = (type === 'All')
+    ? OPTIONS_STRATEGIES
+    : OPTIONS_STRATEGIES.filter(s => s.type === type);
+
+  if (!list.length) {
+    grid.innerHTML = '<div class="opt-empty" style="padding:32px;text-align:center;color:var(--text3)">No strategies in this category.</div>';
+    return;
+  }
+  grid.innerHTML = list.map(s => _buildStrategyCard(s)).join('');
+}
+
+function _buildStrategyCard(s) {
+  const color = OPT_STRATEGY_TYPE_COLORS[s.type] || '#888';
+  const riskBadge = s.risk_type === 'defined'
+    ? '<span class="os-risk-badge os-risk-defined">✓ DEFINED RISK</span>'
+    : '<span class="os-risk-badge os-risk-undefined">⚠ UNDEFINED RISK</span>';
+  const biasIcon = { positive: '↑', negative: '↓', neutral: '→' };
+  const ivReq = s.ivr_min != null
+    ? `IVR ≥ ${s.ivr_min}` : s.ivr_max != null
+    ? `IVR ≤ ${s.ivr_max}` : 'Any IVR';
+
+  return `
+    <div class="os-card" id="os-card-${esc(s.id)}">
+      <div class="os-card-header" onclick="toggleOptStrategyCard('${esc(s.id)}')">
+        <div class="os-card-title-row">
+          <span class="os-card-name">${esc(s.name)}</span>
+          <div class="os-card-badges">
+            <span class="os-type-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${esc(s.type)}</span>
+            ${riskBadge}
+            <span class="os-legs-badge">${s.legs} leg${s.legs !== 1 ? 's' : ''}</span>
+          </div>
+        </div>
+        <p class="os-card-desc">${esc(s.description)}</p>
+        <div class="os-greeks-row">
+          <span class="os-greek" title="Delta target">Δ ${esc(s.delta_target)}</span>
+          <span class="os-greek-sep"></span>
+          <span class="os-greek" title="Theta bias">Θ ${biasIcon[s.theta_bias] || '→'} ${esc(s.theta_bias)}</span>
+          <span class="os-greek-sep"></span>
+          <span class="os-greek" title="Vega bias">ν ${biasIcon[s.vega_bias] || '→'} ${esc(s.vega_bias)}</span>
+          <span class="os-greek-sep"></span>
+          <span class="os-greek" title="Gamma bias">Γ ${biasIcon[s.gamma_bias] || '→'} ${esc(s.gamma_bias)}</span>
+        </div>
+        <div class="os-card-meta-row">
+          <span class="os-meta-chip"><span class="os-meta-label">DTE Entry</span>${s.dte_entry}</span>
+          <span class="os-meta-chip"><span class="os-meta-label">Exit at</span>${s.dte_exit} DTE</span>
+          <span class="os-meta-chip"><span class="os-meta-label">Target</span>${s.profit_target_pct}%</span>
+          <span class="os-meta-chip"><span class="os-meta-label">IV</span>${esc(ivReq)}</span>
+        </div>
+        <div class="os-toggle-hint">▾ expand for full detail</div>
+      </div>
+
+      <div class="os-card-detail" id="os-detail-${esc(s.id)}" style="display:none">
+        <div class="os-detail-grid">
+          <div class="os-detail-section">
+            <div class="os-detail-title">Entry Conditions</div>
+            <div class="os-detail-row"><span class="os-dl">Signal</span><span>${esc(s.entry_signal)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">RSI Signal</span><span>${esc(s.rsi_signal)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Trend</span><span>${esc(s.trend_requirement.replace(/_/g,' '))}</span></div>
+            <div class="os-detail-row"><span class="os-dl">IV Regime</span><span>${esc(s.iv_regime)}</span></div>
+          </div>
+          <div class="os-detail-section">
+            <div class="os-detail-title">Risk Profile</div>
+            <div class="os-detail-row"><span class="os-dl">Max Gain</span><span>${esc(s.max_gain)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Max Loss</span><span>${esc(s.max_loss)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Breakeven</span><span>${esc(s.breakeven)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Stop Loss</span><span>${esc(s.stop_loss_rule)}</span></div>
+          </div>
+          <div class="os-detail-section">
+            <div class="os-detail-title">Trade Management</div>
+            <div class="os-detail-row"><span class="os-dl">Rolling Rule</span><span>${esc(s.rolling_rule)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Market Condition</span><span>${esc(s.market_condition)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Earnings Play</span><span>${s.earnings_play ? '✓ Yes' : 'No'}</span></div>
+          </div>
+          <div class="os-detail-section">
+            <div class="os-detail-title">Position Sizing</div>
+            <div class="os-detail-row"><span class="os-dl">Max % Account</span><span>${s.capital_pct_max}%</span></div>
+            <div class="os-detail-row"><span class="os-dl">Capital Tier</span><span>${esc(s.capital_tier)}</span></div>
+            <div class="os-detail-row"><span class="os-dl">Margin Required</span><span>${s.margin_required ? '✓ Yes' : 'No'}</span></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleOptStrategyCard(id) {
+  const detail = document.getElementById(`os-detail-${id}`);
+  const card   = document.getElementById(`os-card-${id}`);
+  if (!detail || !card) return;
+  const isOpen = detail.style.display !== 'none';
+  detail.style.display = isOpen ? 'none' : 'block';
+  card.classList.toggle('os-card-open', !isOpen);
+  const hint = card.querySelector('.os-toggle-hint');
+  if (hint) hint.textContent = isOpen ? '▾ expand for full detail' : '▴ collapse';
+}
+
+// ════════════════════════════════════════════════════════════════
+// OPTIONS QUESTIONNAIRE — 7 questions, weighted scoring
+// ════════════════════════════════════════════════════════════════
+
+const OPT_QUIZ_QUESTIONS = [
+  {
+    q: 'What is your directional view on the underlying?',
+    hint: 'The most important factor — your bias directly determines which strategies qualify.',
+    options: [
+      { id: 'a', text: 'Strongly Bullish — expecting a significant upward move' },
+      { id: 'b', text: 'Moderately Bullish — slight bullish lean; OK if it goes sideways' },
+      { id: 'c', text: 'Neutral / Sideways — expecting little to no price movement' },
+      { id: 'd', text: 'Moderately Bearish — slight bearish lean; OK if it stays flat' },
+      { id: 'e', text: 'Strongly Bearish — expecting a significant downward move' },
+    ],
+  },
+  {
+    q: 'How much capital are you allocating to this trade?',
+    hint: 'Some strategies require more capital or margin approval to execute properly.',
+    options: [
+      { id: 'a', text: 'Under $500' },
+      { id: 'b', text: '$500 – $2,500' },
+      { id: 'c', text: '$2,500 – $10,000' },
+      { id: 'd', text: 'Over $10,000' },
+    ],
+  },
+  {
+    q: 'What is your risk tolerance for this trade?',
+    hint: '"Undefined" risk means losses can exceed the premium collected — e.g., selling naked options.',
+    options: [
+      { id: 'a', text: 'Strictly defined — only strategies with a hard cap on maximum loss' },
+      { id: 'b', text: 'Defined but wide — accept ratio spreads with limited additional downside' },
+      { id: 'c', text: 'Undefined — willing to accept assignment or margin calls if managed actively' },
+    ],
+  },
+  {
+    q: 'How would you describe the current volatility environment?',
+    hint: 'IVR (IV Rank) compares current IV to its 52-week range. High IVR means options are expensive.',
+    options: [
+      { id: 'a', text: 'Low / Normal IV — options are cheap, IVR below 30' },
+      { id: 'b', text: 'Elevated IV — approaching a catalyst event (earnings, Fed meeting, data release)' },
+      { id: 'c', text: 'Post-event crush — IV spike just occurred; expecting rapid contraction' },
+    ],
+  },
+  {
+    q: 'What is your preferred time horizon and monitoring frequency?',
+    hint: 'Longer DTE requires less monitoring but ties up capital longer.',
+    options: [
+      { id: 'a', text: 'Intraday / Short-term — 0–7 DTE, monitor daily' },
+      { id: 'b', text: 'Swing — 30–45 DTE, check a few times per week' },
+      { id: 'c', text: 'Long-term — 90+ DTE (LEAPS), monthly monitoring is fine' },
+    ],
+  },
+  {
+    q: 'What is your primary trading objective?',
+    hint: "Different objectives fundamentally change which strategy fits best.",
+    options: [
+      { id: 'a', text: 'Consistent premium income — generate steady cash flow from my account' },
+      { id: 'b', text: 'Leveraged capital growth — maximize gains on a high-conviction directional move' },
+      { id: 'c', text: 'Hedging — reduce risk on an existing stock or portfolio position' },
+      { id: 'd', text: 'Acquiring stock at a discount — use The Wheel to buy shares below market' },
+    ],
+  },
+  {
+    q: 'Which Greeks characteristic do you most want to trade?',
+    hint: 'This reveals whether you profit from time passing, direction, or volatility changing.',
+    options: [
+      { id: 'a', text: 'Time Decay (Theta) — want time passing to work in my favor' },
+      { id: 'b', text: 'Directional Momentum (Delta) — want to profit from a price move' },
+      { id: 'c', text: 'Volatility Expansion (Vega) — want to profit from an IV spike' },
+      { id: 'd', text: 'Volatility Contraction (−Vega) — want to profit from IV collapsing' },
+    ],
+  },
+];
+
+let _optQuizStep     = 0;
+let _optQuizAnswers  = Array(OPT_QUIZ_QUESTIONS.length).fill(null);
+let _optQuizKeyBound = false;   // keyboard handler is registered once at DOMContentLoaded
+
+function openOptQuiz() {
+  _optQuizStep    = 0;
+  _optQuizAnswers = Array(OPT_QUIZ_QUESTIONS.length).fill(null);
+  switchOptSubtab('quiz');
+}
+
+// ── Key handler (always registered; checks subtab visibility) ────────────────
+function _optQuizKeyHandler(e) {
+  const quizEl = document.getElementById('opt-subtab-quiz');
+  if (!quizEl || quizEl.style.display === 'none') return;
+  if (_optQuizStep >= OPT_QUIZ_QUESTIONS.length) return;   // results screen
+
+  const opts = [...document.querySelectorAll('.opt-quiz-option input[type="radio"]')];
+  const cur  = opts.findIndex(r => r.checked);
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const nxt = opts[Math.min(cur + 1, opts.length - 1)];
+    if (nxt) { nxt.click(); nxt.closest('.opt-quiz-option').classList.add('selected'); }
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    e.preventDefault();
+    const prv = opts[Math.max(cur - 1, 0)];
+    if (prv) { prv.click(); prv.closest('.opt-quiz-option').classList.add('selected'); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    nextOptQuizQuestion();
+  }
+}
+
+// ── Render question ──────────────────────────────────────────────────────────
+function _renderOptQuizQuestion(n) {
+  const body = document.getElementById('opt-quiz-body');
+  if (!body) return;
+  const total = OPT_QUIZ_QUESTIONS.length;
+  const q     = OPT_QUIZ_QUESTIONS[n];
+  const pct   = Math.round((n / total) * 100);
+  const saved = _optQuizAnswers[n];
+
+  body.innerHTML = `
+    <div class="opt-quiz-inner">
+      <div>
+        <div class="quiz-progress-label">QUESTION ${n + 1} OF ${total}</div>
+        <div class="quiz-progress-track"><div class="quiz-progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div>
+        <p class="quiz-q-text">${esc(q.q)}</p>
+        ${q.hint ? `<p class="quiz-q-hint">${esc(q.hint)}</p>` : ''}
+      </div>
+      <div class="quiz-options">
+        ${q.options.map(opt => `
+          <label class="opt-quiz-option quiz-option${saved === opt.id ? ' selected' : ''}">
+            <input type="radio" name="opt-quiz-q${n}" value="${opt.id}" ${saved === opt.id ? 'checked' : ''}
+              onchange="_optQuizAnswers[${n}]='${opt.id}';document.querySelectorAll('.opt-quiz-option').forEach(el=>el.classList.toggle('selected',el.querySelector('input').checked))">
+            <div class="quiz-option-inner">
+              <div class="quiz-option-dot"></div>
+              <span class="quiz-option-text">${esc(opt.text)}</span>
+            </div>
+          </label>`).join('')}
+      </div>
+      <div class="quiz-nav">
+        ${n > 0 ? `<button class="btn-ghost" onclick="prevOptQuizQuestion()">← BACK</button>` : '<div></div>'}
+        <button class="btn-primary" onclick="nextOptQuizQuestion()">
+          ${n < total - 1 ? 'NEXT →' : 'SHOW RESULTS →'}
+        </button>
+      </div>
+    </div>`;
+}
+
+function nextOptQuizQuestion() {
+  const n        = _optQuizStep;
+  const selected = document.querySelector(`[name="opt-quiz-q${n}"]:checked`);
+  if (!selected) { showToast('Please select an answer to continue.', 'error'); return; }
+  _optQuizAnswers[n] = selected.value;
+  if (n < OPT_QUIZ_QUESTIONS.length - 1) {
+    _optQuizStep = n + 1;
+    _renderOptQuizQuestion(_optQuizStep);
+  } else {
+    _optQuizStep = OPT_QUIZ_QUESTIONS.length;   // signals results screen
+    _renderOptQuizResults();
+  }
+}
+
+function prevOptQuizQuestion() {
+  if (_optQuizStep > 0) { _optQuizStep--; _renderOptQuizQuestion(_optQuizStep); }
+}
+
+// ── Scoring engine ────────────────────────────────────────────────────────────
+// weights: directional 0.35 | iv_environment 0.30 | capital 0.20 | obj+greek 0.15
+// Hard filters applied first (result = 0 if any fail).
+function calculateOptQuizResults() {
+  const [q1, q2, q3, q4, q5, q6, q7] = _optQuizAnswers;
+
+  // Map answers to semantic labels
+  const userView   = { a:'bullish', b:'bullish', c:'neutral', d:'bearish', e:'bearish' }[q1] || 'neutral';
+  const strongDir  = q1 === 'a' || q1 === 'e';
+  const capTier    = { a:'cap_low', b:'cap_low_med', c:'cap_med', d:'cap_high' }[q2] || 'cap_med';
+  const riskPref   = { a:'defined_only', b:'defined_wide', c:'undefined' }[q3] || 'defined_only';
+  const ivEnv      = { a:'low', b:'high', c:'crush' }[q4] || 'low';
+  const horizon    = { a:'intraday', b:'swing', c:'long_term' }[q5] || 'swing';
+  const objective  = { a:'income', b:'growth', c:'hedging', d:'acquiring_stock' }[q6] || 'income';
+  const greekPref  = { a:'theta', b:'delta', c:'vega', d:'negative_vega' }[q7] || 'theta';
+
+  return OPTIONS_STRATEGIES.map(s => {
+    // ── Hard filters ─────────────────────────────────────────────────────────
+    // 1. Undefined risk + user wants defined_only → eliminate
+    if (s.risk_type === 'undefined' && riskPref === 'defined_only') {
+      return { ...s, score: 0, matchPct: 0 };
+    }
+    // 2. High-capital strategy + tiny account → eliminate
+    if (s.capital_tier === 'high' && capTier === 'cap_low') {
+      return { ...s, score: 0, matchPct: 0 };
+    }
+    // 3. Margin strategy + strictly defined-only user → eliminate
+    if (s.margin_required && riskPref === 'defined_only') {
+      return { ...s, score: 0, matchPct: 0 };
+    }
+
+    // ── Soft scores ───────────────────────────────────────────────────────────
+    // 1. Directional alignment (weight 0.35)
+    let directional = 0;
+    if (s.compatible_views.includes(userView)) {
+      directional = strongDir ? 1.0 : 0.88;
+    } else if (s.compatible_views.length >= 3) {
+      directional = 0.50;   // wide/flexible strategy
+    } else {
+      directional = 0.08;   // misaligned but not eliminated
+    }
+    if (strongDir && s.type === 'Directional') directional = Math.min(1.0, directional + 0.10);
+
+    // 2. IV environment match (weight 0.30)
+    let ivMatch = 0;
+    if (ivEnv === 'low') {
+      ivMatch = s.iv_regime === 'low' ? 1.0 : s.iv_regime === 'any' ? 0.60 : 0.15;
+    } else if (ivEnv === 'high') {
+      if   (s.iv_regime === 'high' && s.ivr_min != null) ivMatch = 1.0;
+      else if (s.iv_regime === 'high')                   ivMatch = 0.85;
+      else if (s.iv_regime === 'any')                    ivMatch = 0.55;
+      else                                               ivMatch = 0.15;
+    } else {  // crush
+      if   (s.earnings_play && s.iv_regime === 'high')  ivMatch = 1.0;
+      else if (s.iv_regime === 'high')                  ivMatch = 0.80;
+      else if (s.iv_regime === 'any')                   ivMatch = 0.45;
+      else                                              ivMatch = 0.10;
+    }
+
+    // 3. Capital efficiency (weight 0.20)
+    const capMatrix = {
+      cap_low:     { low: 1.0, medium: 0.45, high: 0.0  },
+      cap_low_med: { low: 1.0, medium: 0.90, high: 0.25 },
+      cap_med:     { low: 1.0, medium: 1.0,  high: 0.60 },
+      cap_high:    { low: 1.0, medium: 1.0,  high: 1.0  },
+    };
+    const capital = (capMatrix[capTier] || capMatrix['cap_med'])[s.capital_tier] ?? 0.5;
+
+    // 4. Objective + Greek match combined (weight 0.15)
+    const objMatch   = s.compatible_objectives.includes(objective)  ? 1.0 : 0.08;
+    const greekMatch = s.compatible_greeks_pref.includes(greekPref) ? 1.0 : 0.12;
+    const objGreek   = (objMatch + greekMatch) / 2;
+
+    // Horizon bonus: multiply score by 0.82–1.00
+    const horizonBonus = s.compatible_horizons.includes(horizon) ? 1.0 : 0.82;
+
+    const rawScore = (directional * 0.35 + ivMatch * 0.30 + capital * 0.20 + objGreek * 0.15) * horizonBonus;
+    const matchPct = Math.min(99, Math.round(rawScore * 100));
+
+    return { ...s, score: rawScore, matchPct };
+  }).sort((a, b) => b.matchPct - a.matchPct || b.score - a.score);
+}
+
+// ── Results screen ────────────────────────────────────────────────────────────
+function _renderOptQuizResults() {
+  const body = document.getElementById('opt-quiz-body');
+  if (!body) return;
+
+  const top5 = calculateOptQuizResults().slice(0, 5);
+
+  body.innerHTML = `
+    <div class="opt-quiz-inner">
+      <div class="quiz-results-header">
+        <p class="quiz-results-subtitle">Top 5 options strategies matched to your market view, risk tolerance, and objectives.</p>
+      </div>
+      <div class="quiz-results">
+        ${top5.map((r, i) => {
+          const color    = OPT_STRATEGY_TYPE_COLORS[r.type] || '#888';
+          const pctColor = r.matchPct >= 75 ? 'var(--green)' : r.matchPct >= 50 ? 'var(--yellow)' : 'var(--text2)';
+          const riskBadge = r.risk_type === 'defined'
+            ? '<span class="os-risk-badge os-risk-defined">✓ DEFINED</span>'
+            : '<span class="os-risk-badge os-risk-undefined">⚠ UNDEFINED</span>';
+          return `
+            <div class="result-card ${i === 0 ? 'result-card-top' : ''}">
+              <div class="result-card-header">
+                <span class="result-match-pct" style="color:${pctColor}">${r.matchPct}% match</span>
+                <span class="os-type-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${esc(r.type)}</span>
+                ${riskBadge}
+              </div>
+              <div class="result-name">${esc(r.name)}</div>
+              <p class="result-desc">${esc(r.description)}</p>
+              <div class="os-result-bar-wrap">
+                <div class="os-result-bar-fill" style="width:${r.matchPct}%;background:${color}88"></div>
+              </div>
+              <button class="btn-primary result-btn" onclick="viewOptStrategyCard('${esc(r.id)}')">
+                View Strategy Details →
+              </button>
+            </div>`;
+        }).join('')}
+      </div>
+      <div class="quiz-results-footer">
+        <button class="btn-ghost" onclick="openOptQuiz()">↺ Start Over</button>
+      </div>
+    </div>`;
+}
+
+// Navigate to the matching strategy card in STRATEGIES subtab
+function viewOptStrategyCard(id) {
+  filterOptStrategies('All');
+  switchOptSubtab('strategies');
+  setTimeout(() => {
+    const card = document.getElementById(`os-card-${id}`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const detail = document.getElementById(`os-detail-${id}`);
+    if (detail && detail.style.display === 'none') toggleOptStrategyCard(id);
+  }, 120);
+}

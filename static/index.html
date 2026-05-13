@@ -683,34 +683,67 @@
 
     <!-- ── OPTIONS TAB ───────────────────────────────────────────── -->
     <div id="chart-tab-options" style="display:none">
-      <!-- Summary metrics bar -->
-      <div class="opt-summary-bar" id="opt-summary-bar">
-        <span class="opt-summary-item opt-summary-loading">Loading options data…</span>
+
+      <!-- Options subtab navigation -->
+      <div class="opt-subtab-nav">
+        <button class="opt-subtab-btn active" id="opt-subtab-btn-chain"      onclick="switchOptSubtab('chain')">📋 CHAIN</button>
+        <button class="opt-subtab-btn"        id="opt-subtab-btn-strategies" onclick="switchOptSubtab('strategies')">🎯 STRATEGIES</button>
+        <button class="opt-subtab-btn"        id="opt-subtab-btn-quiz"       onclick="switchOptSubtab('quiz')">❓ QUESTIONNAIRE</button>
       </div>
-      <!-- Controls row: expiry picker + calls/puts toggle -->
-      <div class="opt-controls-row">
-        <label class="opt-label">Expiry</label>
-        <select id="opt-expiry-select" class="opt-select" onchange="onExpiryChange(this.value)">
-          <option>Loading…</option>
-        </select>
-        <div class="opt-side-toggle">
-          <button class="opt-side-btn active" id="opt-btn-calls" onclick="_setSide('calls')">Calls</button>
-          <button class="opt-side-btn" id="opt-btn-puts"  onclick="_setSide('puts')">Puts</button>
+
+      <!-- ── CHAIN subtab ──────────────────────────────────────── -->
+      <div id="opt-subtab-chain" style="display:flex">
+        <!-- Summary metrics bar -->
+        <div class="opt-summary-bar" id="opt-summary-bar">
+          <span class="opt-summary-item opt-summary-loading">Loading options data…</span>
+        </div>
+        <!-- Controls row: expiry picker + calls/puts toggle -->
+        <div class="opt-controls-row">
+          <label class="opt-label">Expiry</label>
+          <select id="opt-expiry-select" class="opt-select" onchange="onExpiryChange(this.value)">
+            <option>Loading…</option>
+          </select>
+          <div class="opt-side-toggle">
+            <button class="opt-side-btn active" id="opt-btn-calls" onclick="_setSide('calls')">Calls</button>
+            <button class="opt-side-btn" id="opt-btn-puts"  onclick="_setSide('puts')">Puts</button>
+          </div>
+        </div>
+        <!-- Chain table -->
+        <div class="opt-chain-wrap" id="opt-chain-wrap">
+          <div class="chart-loading"><div class="loading-spinner"></div><span>Loading chain…</span></div>
+        </div>
+        <!-- IV Smile chart -->
+        <div id="opt-iv-chart" class="opt-iv-chart"></div>
+        <!-- Disclaimer -->
+        <div class="opt-disclaimer">Options data via Yahoo Finance · Delayed · For educational use only · Not financial advice</div>
+      </div>
+
+      <!-- ── STRATEGIES subtab ─────────────────────────────────── -->
+      <div id="opt-subtab-strategies" style="display:none">
+        <div class="os-filter-bar" id="os-filter-bar">
+          <button class="os-filter-btn active" data-type="All"         onclick="filterOptStrategies('All')">All</button>
+          <button class="os-filter-btn os-filter-income"      data-type="Income"      onclick="filterOptStrategies('Income')">Income</button>
+          <button class="os-filter-btn os-filter-directional" data-type="Directional" onclick="filterOptStrategies('Directional')">Directional</button>
+          <button class="os-filter-btn os-filter-volatility"  data-type="Volatility"  onclick="filterOptStrategies('Volatility')">Volatility</button>
+          <button class="os-filter-btn os-filter-hedging"     data-type="Hedging"     onclick="filterOptStrategies('Hedging')">Hedging</button>
+          <button class="os-filter-btn os-filter-arbitrage"   data-type="Arbitrage"   onclick="filterOptStrategies('Arbitrage')">Arbitrage</button>
+        </div>
+        <div class="os-grid-wrap">
+          <div class="os-grid" id="os-strategy-grid"></div>
         </div>
       </div>
-      <!-- Chain table -->
-      <div class="opt-chain-wrap" id="opt-chain-wrap">
-        <div class="chart-loading"><div class="loading-spinner"></div><span>Loading chain…</span></div>
+
+      <!-- ── QUESTIONNAIRE subtab ──────────────────────────────── -->
+      <div id="opt-subtab-quiz" style="display:none">
+        <div id="opt-quiz-body" class="opt-quiz-body"></div>
       </div>
-      <!-- IV Smile chart -->
-      <div id="opt-iv-chart" class="opt-iv-chart"></div>
-      <!-- Disclaimer -->
-      <div class="opt-disclaimer">Options data via Yahoo Finance · Delayed · For educational use only · Not financial advice</div>
+
     </div>
 
   </div>
 </div>
 
+<script src="options_strategies.js"></script>
 <script src="app.js"></script>
 <!-- Strategy Quiz Modal -->
 <div id="strategy-quiz-modal" class="modal-overlay" onclick="closeModalOverlay(event,'strategy-quiz-modal')">
