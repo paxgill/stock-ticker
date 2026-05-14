@@ -237,6 +237,7 @@
       <button class="tab-btn" data-tab="correlation" onclick="switchTab('correlation',this)">CORRELATION</button>
       <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
       <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
+      <button class="tab-btn" data-tab="optsig" onclick="switchTab('optsig',this)">⚡ OPT SIGNALS</button>
     </nav>
     <div class="dash-right">
       <span id="market-status" class="market-status"></span>
@@ -331,6 +332,121 @@
       <span class="corr-leg-item corr-high">■ Near 1.0</span> stocks move together &nbsp;·&nbsp;
       <span class="corr-leg-item corr-zero">■ Near 0</span> little relationship &nbsp;·&nbsp;
       <span class="corr-leg-item corr-neg">■ Near −1.0</span> move opposite
+    </div>
+  </div>
+
+  <!-- ─ Tab: Opt Signals ──────────────────────────────────────────── -->
+  <div id="tab-optsig" class="tab-content">
+    <!-- Landing / quiz state -->
+    <div id="optsig-landing" class="optsig-landing">
+      <div class="optsig-landing-inner">
+        <div class="optsig-hero-icon">⚡</div>
+        <h2 class="optsig-hero-title">Options Signal Engine</h2>
+        <p class="optsig-hero-sub">
+          Answer 7 quick questions and get live options trade recommendations
+          ranked by confidence score — powered by Black-Scholes Greeks and
+          IV Rank analysis. No new accounts. No paid APIs.
+        </p>
+        <button class="btn-primary optsig-start-btn" onclick="optSigStartQuiz()">Get Started →</button>
+        <div class="optsig-or-row">
+          <span class="optsig-or-line"></span>
+          <span class="optsig-or-text">or pick a strategy directly</span>
+          <span class="optsig-or-line"></span>
+        </div>
+        <div id="optsig-strategy-pills" class="optsig-strategy-pills"></div>
+      </div>
+    </div>
+
+    <!-- Results state (hidden until strategy chosen) -->
+    <div id="optsig-results" class="optsig-results" style="display:none">
+      <!-- Strategy header -->
+      <div class="optsig-results-header">
+        <div class="optsig-strategy-info" id="optsig-strategy-info"></div>
+        <div class="optsig-results-actions">
+          <button class="btn-sm" onclick="optSigScan()">↺ RESCAN</button>
+          <button class="btn-ghost" onclick="optSigReset()">← Change Strategy</button>
+        </div>
+      </div>
+
+      <!-- Params panel -->
+      <details class="optsig-params-panel" id="optsig-params-panel">
+        <summary class="optsig-params-summary">⚙ Customize Parameters</summary>
+        <div class="optsig-params-body">
+          <div class="optsig-param-grid">
+            <div class="optsig-param-group">
+              <label class="setting-label">IVR MIN <span class="optsig-param-val" id="optsig-ivr-min-v">—</span></label>
+              <input type="range" id="optsig-ivr-min" min="0" max="100" value="0"
+                     oninput="optSigParamChange('ivr_min',this.value)">
+            </div>
+            <div class="optsig-param-group">
+              <label class="setting-label">IVR MAX <span class="optsig-param-val" id="optsig-ivr-max-v">—</span></label>
+              <input type="range" id="optsig-ivr-max" min="0" max="100" value="100"
+                     oninput="optSigParamChange('ivr_max',this.value)">
+            </div>
+            <div class="optsig-param-group">
+              <label class="setting-label">DTE TARGET</label>
+              <input type="number" id="optsig-dte" min="7" max="365" value="45" class="number-input"
+                     oninput="optSigParamChange('dte_entry',this.value)" style="width:70px">
+            </div>
+            <div class="optsig-param-group">
+              <label class="setting-label">PROFIT TARGET %</label>
+              <input type="number" id="optsig-pt" min="10" max="100" value="50" class="number-input"
+                     oninput="optSigParamChange('profit_target_pct',this.value)" style="width:70px">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <div class="optsig-param-group">
+              <label class="setting-label">RSI SIGNAL</label>
+              <select id="optsig-rsi-signal" onchange="optSigParamChange('rsi_signal',this.value)">
+                <option value="neutral">Neutral</option>
+                <option value="oversold">Oversold</option>
+                <option value="overbought">Overbought</option>
+                <option value="any">Any</option>
+              </select>
+            </div>
+            <div class="optsig-param-group">
+              <label class="setting-label">IV REGIME</label>
+              <select id="optsig-iv-regime" onchange="optSigParamChange('iv_regime',this.value)">
+                <option value="any">Any</option>
+                <option value="high">High IV</option>
+                <option value="low">Low IV</option>
+              </select>
+            </div>
+            <div class="optsig-param-group">
+              <label class="setting-label">TREND</label>
+              <select id="optsig-trend" onchange="optSigParamChange('trend_requirement',this.value)">
+                <option value="any">Any</option>
+                <option value="bullish">Bullish</option>
+                <option value="bearish">Bearish</option>
+                <option value="consolidating">Consolidating</option>
+              </select>
+            </div>
+          </div>
+          <!-- Extra tickers -->
+          <div class="optsig-extra-tickers" style="margin-top:10px">
+            <label class="setting-label">ADD TICKERS TO SCAN</label>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+              <input type="text" id="optsig-extra-input" placeholder="SPY, QQQ, TSLA..."
+                     autocapitalize="characters" spellcheck="false" class="inline-text-input"
+                     style="width:200px" onkeydown="if(event.key==='Enter')optSigAddTickers()">
+              <button class="btn-sm" onclick="optSigAddTickers()">ADD</button>
+            </div>
+            <div id="optsig-extra-chips" class="ticker-chips" style="margin-top:6px"></div>
+          </div>
+          <button class="btn-primary" onclick="optSigScan()" style="margin-top:12px">↺ Apply &amp; Rescan</button>
+        </div>
+      </details>
+
+      <!-- Disclaimer -->
+      <div class="disclaimer">
+        ⚠ DISCLAIMER: Option prices use Black-Scholes estimates with implied volatility from Yahoo Finance.
+        These are NOT real quotes. Always verify with your broker before trading. Not financial advice.
+      </div>
+
+      <!-- Recommendation cards grid -->
+      <div id="optsig-cards" class="optsig-cards">
+        <div class="loading-screen"><div class="loading-spinner"></div><div>Scanning tickers...</div></div>
+      </div>
     </div>
   </div>
 
@@ -745,6 +861,20 @@
 
 <script src="options_strategies.js"></script>
 <script src="app.js"></script>
+<!-- Opt Signals Quiz Modal -->
+<div id="optsig-quiz-modal" class="modal-overlay" onclick="closeModalOverlay(event,'optsig-quiz-modal')">
+  <div class="modal-box modal-box-med">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">⚡ FIND YOUR OPTIONS STRATEGY</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">7 quick questions — no finance jargon required.</div>
+      </div>
+      <button class="modal-close" onclick="closeModal('optsig-quiz-modal')">✕</button>
+    </div>
+    <div id="optsig-quiz-body" class="quiz-body"></div>
+  </div>
+</div>
+
 <!-- Strategy Quiz Modal -->
 <div id="strategy-quiz-modal" class="modal-overlay" onclick="closeModalOverlay(event,'strategy-quiz-modal')">
   <div class="modal-box modal-box-med">

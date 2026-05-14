@@ -1563,6 +1563,103 @@ def options_summary(ticker):
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Options Signals Routes ───────────────────────────────────────────────────
+from options_signals import recommend_for_strategy, scan_top_n, STRATEGY_CONFIGS
+
+
+def _parse_param_overrides(args):
+    """Extract optional scoring param overrides from query string."""
+    overrides = {}
+    for key in ('ivr_min', 'ivr_max'):
+        val = args.get(key)
+        if val is not None:
+            try:
+                overrides[key] = float(val)
+            except ValueError:
+                pass
+    for key in ('rsi_signal', 'iv_regime', 'trend_requirement'):
+        val = args.get(key)
+        if val:
+            overrides[key] = val
+    return overrides or None
+
+
+@app.route("/api/options/signals/strategies")
+def optsig_strategies():
+    """Return strategy_id → display metadata for the frontend picker."""
+    out = []
+    for sid, cfg in STRATEGY_CONFIGS.items():
+        out.append({'id': sid, 'ivr_min': cfg.get('ivr_min'), 'ivr_max': cfg.get('ivr_max'),
+                    'rsi_signal': cfg.get('rsi_signal'), 'iv_regime': cfg.get('iv_regime'),
+                    'trend_requirement': cfg.get('trend_requirement'), 'dte_entry': cfg.get('dte_entry')})
+    return jsonify(out)
+
+
+@app.route("/api/options/signals/recommend/<strategy_id>")
+def optsig_recommend(strategy_id):
+    """
+    Score tickers against a strategy and return recommendations.
+
+    Query params:
+        tickers=AAPL,SPY,QQQ   (comma-separated; falls back to watchlist)
+        ivr_min, ivr_max, rsi_signal, iv_regime, trend_requirement  (optional overrides)
+    """
+    strategy_id = strategy_id.lower()
+
+    tickers_param = request.args.get('tickers', '')
+    if tickers_param:
+        tickers = [t.strip().upper() for t in tickers_param.split(',') if t.strip()]
+    else:
+        # Fall back to the user's watchlist
+        tickers = [w.symbol for w in WatchlistItem.query.all()]
+
+    if not tickers:
+        return jsonify([])
+
+    overrides = _parse_param_overrides(request.args)
+
+    try:
+        results = recommend_for_strategy(strategy_id, tickers, overrides)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/options/signals/scan")
+def optsig_scan():
+    """
+    Auto-scan watchlist + any extra tickers, return top-N for active strategy.
+
+    Query params:
+        strategy_id   (required)
+        top_n=10      (default 10)
+        tickers=...   (additional tickers beyond watchlist)
+        + same override params as /recommend
+    """
+    strategy_id = request.args.get('strategy_id', 'iron_condor').lower()
+    top_n_str   = request.args.get('top_n', '10')
+    try:
+        top_n = max(1, min(25, int(top_n_str)))
+    except ValueError:
+        top_n = 10
+
+    extra_param = request.args.get('tickers', '')
+    extra = [t.strip().upper() for t in extra_param.split(',') if t.strip()]
+    watchlist = [w.symbol for w in WatchlistItem.query.all()]
+
+    tickers = list(dict.fromkeys(watchlist + extra))   # deduplicate, preserve order
+    if not tickers:
+        return jsonify([])
+
+    overrides = _parse_param_overrides(request.args)
+
+    try:
+        results = scan_top_n(strategy_id, tickers, top_n, overrides)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",

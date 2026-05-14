@@ -664,6 +664,7 @@ function switchTab(name, btn) {
   if (name === 'correlation') renderCorrelationTab();
   if (name === 'portfolio')   { loadPortfolio().then(renderPortfolio); }
   if (name === 'journal')     { loadTrades().then(renderJournal); }
+  if (name === 'optsig')      renderOptSigTab();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -3431,4 +3432,440 @@ function viewOptStrategyCard(id) {
     const detail = document.getElementById(`os-detail-${id}`);
     if (detail && detail.style.display === 'none') toggleOptStrategyCard(id);
   }, 120);
+}
+
+// ════════════════════════════════════════════════════════════════
+// OPTIONS SIGNALS TAB
+// ════════════════════════════════════════════════════════════════
+
+// ── State ─────────────────────────────────────────────────────
+const optSigState = {
+  strategyId:   null,
+  params:       {},          // user overrides  (ivr_min, ivr_max, rsi_signal, iv_regime, trend_requirement)
+  extraTickers: [],          // additional tickers beyond watchlist
+  quizAnswers:  [],
+  quizStep:     0,
+  results:      [],
+};
+
+// Type → accent colour (matches existing OPT_STRATEGY_TYPE_COLORS)
+const _OPTSIG_TYPE_COLORS = {
+  Income:      '#3b82f6',
+  Directional: '#22c55e',
+  Volatility:  '#f97316',
+  Hedging:     '#a855f7',
+  Arbitrage:   '#eab308',
+};
+
+// ── Tab entry point ───────────────────────────────────────────
+function renderOptSigTab() {
+  // First visit: show landing
+  if (!optSigState.strategyId) {
+    _optSigShowLanding();
+  } else {
+    // Already has a strategy selected — show results
+    document.getElementById('optsig-landing').style.display = 'none';
+    document.getElementById('optsig-results').style.display = '';
+  }
+}
+
+// ── Landing ───────────────────────────────────────────────────
+function _optSigShowLanding() {
+  document.getElementById('optsig-landing').style.display = '';
+  document.getElementById('optsig-results').style.display = 'none';
+
+  // Render strategy pill buttons
+  const pillWrap = document.getElementById('optsig-strategy-pills');
+  if (pillWrap && OPTIONS_STRATEGIES) {
+    pillWrap.innerHTML = OPTIONS_STRATEGIES.map(s => {
+      const color = _OPTSIG_TYPE_COLORS[s.type] || '#888';
+      return `<button class="optsig-pill"
+                style="border-color:${color}44;color:${color}"
+                onclick="optSigSelectStrategy('${esc(s.id)}')">${esc(s.name)}</button>`;
+    }).join('');
+  }
+}
+
+// ── Quiz entry ────────────────────────────────────────────────
+function optSigStartQuiz() {
+  optSigState.quizAnswers = [];
+  optSigState.quizStep = 0;
+  openModal('optsig-quiz-modal');
+  _optSigRenderQuestion();
+}
+
+// Uses the same OPT_QUIZ_QUESTIONS defined in app.js (options tab)
+// Answers stored as option id strings: 'a', 'b', 'c', etc.
+function _optSigRenderQuestion() {
+  const body = document.getElementById('optsig-quiz-body');
+  if (!body) return;
+  const step = optSigState.quizStep;
+  const q = OPT_QUIZ_QUESTIONS[step];
+  if (!q) { _optSigCalculateResults(); return; }
+
+  const total   = OPT_QUIZ_QUESTIONS.length;
+  const pct     = ((step + 1) / total) * 100;
+  const saved   = optSigState.quizAnswers[step] || null;
+
+  body.innerHTML = `
+    <div class="opt-quiz-inner">
+      <div>
+        <div class="quiz-progress-label">QUESTION ${step + 1} OF ${total}</div>
+        <div class="quiz-progress-track"><div class="quiz-progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div>
+        <p class="quiz-q-text">${esc(q.q)}</p>
+        ${q.hint ? `<p class="quiz-q-hint">${esc(q.hint)}</p>` : ''}
+      </div>
+      <div class="quiz-options">
+        ${q.options.map(opt => `
+          <label class="opt-quiz-option quiz-option${saved === opt.id ? ' selected' : ''}">
+            <input type="radio" name="optsig-q${step}" value="${esc(opt.id)}" ${saved === opt.id ? 'checked' : ''}
+              onchange="optSigAnswerQ('${esc(opt.id)}');
+                        document.querySelectorAll('[name=optsig-q${step}]').forEach(r=>r.closest('.opt-quiz-option').classList.toggle('selected',r.checked))">
+            <div class="quiz-option-inner">
+              <div class="quiz-option-dot"></div>
+              <span class="quiz-option-text">${esc(opt.text)}</span>
+            </div>
+          </label>`).join('')}
+      </div>
+      <div class="quiz-nav">
+        ${step > 0 ? `<button class="btn-ghost" onclick="optSigPrevQ()">← BACK</button>` : `<div></div>`}
+        <button class="btn-primary" onclick="optSigNextQ()">
+          ${step === total - 1 ? 'SHOW RESULTS →' : 'NEXT →'}
+        </button>
+      </div>
+    </div>`;
+}
+
+function optSigAnswerQ(optId) {
+  optSigState.quizAnswers[optSigState.quizStep] = optId;
+}
+function optSigPrevQ() {
+  if (optSigState.quizStep > 0) { optSigState.quizStep--; _optSigRenderQuestion(); }
+}
+function optSigNextQ() {
+  const selected = document.querySelector(`[name="optsig-q${optSigState.quizStep}"]:checked`);
+  if (!selected) { showToast('Please select an answer to continue.', 'error'); return; }
+  optSigState.quizAnswers[optSigState.quizStep] = selected.value;
+  if (optSigState.quizStep < OPT_QUIZ_QUESTIONS.length - 1) {
+    optSigState.quizStep++;
+    _optSigRenderQuestion();
+  } else {
+    _optSigCalculateResults();
+  }
+}
+
+function _optSigCalculateResults() {
+  // Temporarily borrow the existing scoring engine by swapping its answer array
+  const savedAnswers = _optQuizAnswers.slice();
+  _optQuizAnswers.splice(0, _optQuizAnswers.length,
+    ...OPT_QUIZ_QUESTIONS.map((_, i) => optSigState.quizAnswers[i] || null));
+
+  const ranked = calculateOptQuizResults(); // returns sorted array of {…s, matchPct}
+  const top5   = ranked.slice(0, 5);
+
+  // Restore
+  _optQuizAnswers.splice(0, _optQuizAnswers.length, ...savedAnswers);
+
+  closeModal('optsig-quiz-modal');
+  _optSigShowQuizResults(top5);
+}
+
+function _optSigShowQuizResults(top5) {
+  // Show results inline on landing before redirect
+  const landing = document.getElementById('optsig-landing');
+  const color0  = _OPTSIG_TYPE_COLORS[top5[0]?.type] || '#3b82f6';
+  landing.querySelector('.optsig-landing-inner').innerHTML = `
+    <div class="optsig-quiz-results">
+      <h3 class="optsig-quiz-results-title">Your Strategy Matches</h3>
+      <p class="optsig-hero-sub">Based on your answers — click any match to run live recommendations.</p>
+      <div class="optsig-quiz-result-list">
+        ${top5.map((r, i) => {
+          const color = _OPTSIG_TYPE_COLORS[r.type] || '#888';
+          const riskClass = r.risk_type === 'defined' ? 'os-risk-defined' : 'os-risk-undefined';
+          const riskLabel = r.risk_type === 'defined' ? 'Defined Risk' : 'Undefined Risk';
+          return `
+            <div class="optsig-qr-card${i === 0 ? ' optsig-qr-top' : ''}"
+                 onclick="optSigSelectStrategy('${esc(r.id)}')">
+              <div class="optsig-qr-header">
+                <span class="optsig-qr-pct" style="color:${color}">${r.matchPct}% match</span>
+                <span class="os-type-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${esc(r.type)}</span>
+                <span class="os-risk-badge ${riskClass}">${riskLabel}</span>
+              </div>
+              <div class="optsig-qr-name">${esc(r.name)}</div>
+              <div class="os-result-bar-wrap" style="margin:6px 0">
+                <div class="os-result-bar-fill" style="width:${r.matchPct}%;background:${color}88"></div>
+              </div>
+              <p class="optsig-qr-desc">${esc(r.description.substring(0, 120))}…</p>
+              <button class="btn-primary" style="margin-top:8px;font-size:11px;padding:5px 14px">
+                Run Live Scan →
+              </button>
+            </div>`;
+        }).join('')}
+      </div>
+      <button class="btn-ghost" style="margin-top:16px" onclick="_optSigShowLanding()">← Start Over</button>
+    </div>`;
+}
+
+// ── Strategy selection & scan ─────────────────────────────────
+function optSigSelectStrategy(strategyId) {
+  optSigState.strategyId = strategyId;
+
+  // Sync params from strategy config
+  const strat = OPTIONS_STRATEGIES.find(s => s.id === strategyId);
+  optSigState.params = {};  // start clean, let backend use defaults
+
+  document.getElementById('optsig-landing').style.display = 'none';
+  document.getElementById('optsig-results').style.display = '';
+
+  // Render strategy header card
+  _optSigRenderStrategyHeader(strat);
+  // Sync param controls to strategy defaults
+  _optSigSyncParamControls(strat);
+  // Kick off scan
+  optSigScan();
+}
+
+function _optSigRenderStrategyHeader(strat) {
+  const el = document.getElementById('optsig-strategy-info');
+  if (!el || !strat) return;
+  const color = _OPTSIG_TYPE_COLORS[strat.type] || '#888';
+  const riskClass = strat.risk_type === 'defined' ? 'os-risk-defined' : 'os-risk-undefined';
+  el.innerHTML = `
+    <div class="optsig-strat-card">
+      <div class="optsig-strat-title">
+        <span class="optsig-strat-name">${esc(strat.name)}</span>
+        <span class="os-type-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${esc(strat.type)}</span>
+        <span class="os-risk-badge ${riskClass}">${strat.risk_type === 'defined' ? 'Defined Risk' : 'Undefined Risk'}</span>
+        <span class="optsig-strat-legs">${strat.legs} leg${strat.legs !== 1 ? 's' : ''}</span>
+      </div>
+      <p class="optsig-strat-desc">${esc(strat.description.substring(0, 200))}${strat.description.length > 200 ? '…' : ''}</p>
+      <div class="optsig-strat-meta">
+        ${strat.ivr_min != null ? `<span class="optsig-meta-chip">IVR ≥ ${strat.ivr_min}</span>` : ''}
+        ${strat.ivr_max != null ? `<span class="optsig-meta-chip">IVR ≤ ${strat.ivr_max}</span>` : ''}
+        <span class="optsig-meta-chip">DTE ~${strat.dte_entry}d</span>
+        <span class="optsig-meta-chip">Target ${strat.profit_target_pct}%</span>
+        <span class="optsig-meta-chip">θ ${strat.theta_bias}</span>
+        <span class="optsig-meta-chip">V ${strat.vega_bias}</span>
+      </div>
+    </div>`;
+}
+
+function _optSigSyncParamControls(strat) {
+  if (!strat) return;
+  const $ = id => document.getElementById(id);
+
+  const ivrMin = strat.ivr_min != null ? strat.ivr_min : 0;
+  const ivrMax = strat.ivr_max != null ? strat.ivr_max : 100;
+  $('optsig-ivr-min').value = ivrMin;
+  $('optsig-ivr-min-v').textContent = ivrMin;
+  $('optsig-ivr-max').value = ivrMax;
+  $('optsig-ivr-max-v').textContent = ivrMax === 100 ? '—' : ivrMax;
+
+  $('optsig-dte').value = strat.dte_entry || 45;
+  $('optsig-pt').value  = strat.profit_target_pct || 50;
+
+  const rsiSel = $('optsig-rsi-signal');
+  if (rsiSel) rsiSel.value = strat.rsi_signal === 'any' ? 'any' : (strat.rsi_signal || 'neutral');
+
+  const ivSel = $('optsig-iv-regime');
+  if (ivSel) ivSel.value = strat.iv_regime || 'any';
+
+  const trendSel = $('optsig-trend');
+  if (trendSel) {
+    const tr = strat.trend_requirement || 'any';
+    trendSel.value = tr.includes('200') ? (tr.includes('above') ? 'bullish' : 'bearish') : tr;
+  }
+}
+
+// ── Param control handler ─────────────────────────────────────
+function optSigParamChange(key, value) {
+  const numKeys = ['ivr_min', 'ivr_max', 'dte_entry', 'profit_target_pct'];
+  optSigState.params[key] = numKeys.includes(key) ? parseFloat(value) : value;
+
+  // Update display labels for sliders
+  if (key === 'ivr_min') document.getElementById('optsig-ivr-min-v').textContent = value;
+  if (key === 'ivr_max') document.getElementById('optsig-ivr-max-v').textContent = value >= 100 ? '—' : value;
+}
+
+// ── Extra tickers ─────────────────────────────────────────────
+function optSigAddTickers() {
+  const inp = document.getElementById('optsig-extra-input');
+  if (!inp) return;
+  const symbols = inp.value.toUpperCase().split(/[\s,]+/).filter(s => /^[A-Z.^]{1,10}$/.test(s));
+  symbols.forEach(sym => {
+    if (!optSigState.extraTickers.includes(sym)) optSigState.extraTickers.push(sym);
+  });
+  inp.value = '';
+  _optSigRenderExtraChips();
+}
+
+function _optSigRenderExtraChips() {
+  const wrap = document.getElementById('optsig-extra-chips');
+  if (!wrap) return;
+  wrap.innerHTML = optSigState.extraTickers.map(sym =>
+    `<span class="ticker-chip">${esc(sym)}
+       <button class="chip-remove" onclick="optSigRemoveTicker('${esc(sym)}')">✕</button>
+     </span>`
+  ).join('');
+}
+
+function optSigRemoveTicker(sym) {
+  optSigState.extraTickers = optSigState.extraTickers.filter(s => s !== sym);
+  _optSigRenderExtraChips();
+}
+
+// ── Scan / fetch ──────────────────────────────────────────────
+async function optSigScan() {
+  const cardsEl = document.getElementById('optsig-cards');
+  cardsEl.innerHTML = `<div class="loading-screen"><div class="loading-spinner"></div>
+    <div>Scanning tickers — this may take 15–30 seconds…</div></div>`;
+
+  const stratId = optSigState.strategyId;
+  if (!stratId) return;
+
+  // Build query
+  const params = new URLSearchParams();
+  if (optSigState.extraTickers.length) {
+    params.set('tickers', optSigState.extraTickers.join(','));
+  }
+  // Custom param overrides
+  const overrides = optSigState.params;
+  if (overrides.ivr_min != null)            params.set('ivr_min', overrides.ivr_min);
+  if (overrides.ivr_max != null && overrides.ivr_max < 100) params.set('ivr_max', overrides.ivr_max);
+  if (overrides.rsi_signal)                 params.set('rsi_signal', overrides.rsi_signal);
+  if (overrides.iv_regime)                  params.set('iv_regime', overrides.iv_regime);
+  if (overrides.trend_requirement)          params.set('trend_requirement', overrides.trend_requirement);
+
+  const qStr = params.toString();
+  const url = `/api/options/signals/recommend/${encodeURIComponent(stratId)}${qStr ? '?' + qStr : ''}`;
+
+  try {
+    const data = await api.get(url);
+    optSigState.results = data;
+    _optSigRenderCards(data);
+  } catch (e) {
+    cardsEl.innerHTML = `<div class="no-profile-msg">⚠ Scan failed: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Reset ─────────────────────────────────────────────────────
+function optSigReset() {
+  optSigState.strategyId = null;
+  optSigState.params = {};
+  optSigState.extraTickers = [];
+  optSigState.results = [];
+  _optSigShowLanding();
+}
+
+// ── Render recommendation cards ───────────────────────────────
+function _optSigRenderCards(results) {
+  const wrap = document.getElementById('optsig-cards');
+  if (!results || !results.length) {
+    wrap.innerHTML = `<div class="no-profile-msg">
+      No recommendations found. Try adjusting parameters or adding more tickers in the ⚙ panel above.
+    </div>`;
+    return;
+  }
+
+  const strat = OPTIONS_STRATEGIES.find(s => s.id === optSigState.strategyId);
+  const color = strat ? (_OPTSIG_TYPE_COLORS[strat.type] || '#888') : '#888';
+
+  wrap.innerHTML = `<div class="optsig-legend">
+    <span class="optsig-sig-pill optsig-sig-open">OPEN</span> Strong match &nbsp;·&nbsp;
+    <span class="optsig-sig-pill optsig-sig-monitor">MONITOR</span> Partial match &nbsp;·&nbsp;
+    <span class="optsig-sig-pill optsig-sig-avoid">AVOID</span> Poor fit
+  </div>
+  <div class="optsig-cards-grid">
+    ${results.map(r => _optSigBuildCard(r, color)).join('')}
+  </div>`;
+}
+
+function _optSigBuildCard(r, stratColor) {
+  const sigClass = { OPEN: 'optsig-sig-open', MONITOR: 'optsig-sig-monitor', AVOID: 'optsig-sig-avoid' }[r.signal] || '';
+  const t = r.suggested_trade;
+
+  // Confidence bar
+  const confColor = r.confidence >= 65 ? '#22c55e' : r.confidence >= 38 ? '#f59e0b' : '#ef4444';
+
+  // Legs table
+  let legsHtml = '';
+  if (t && t.legs && t.legs.length) {
+    legsHtml = `<table class="optsig-legs-table">
+      <thead><tr><th>Action</th><th>Type</th><th>Strike</th><th>Qty</th><th>~Price</th></tr></thead>
+      <tbody>
+        ${t.legs.map(l => {
+          const actionClass = l.action === 'SELL' ? 'optsig-leg-sell' : (l.action === 'BUY' ? 'optsig-leg-buy' : '');
+          return `<tr>
+            <td class="${actionClass}">${esc(l.action)}</td>
+            <td>${esc(l.type)}</td>
+            <td>$${esc(String(l.strike))}</td>
+            <td>${esc(String(l.qty))}</td>
+            <td>$${esc(String(l.price))}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  }
+
+  // Credit/debit label
+  let cdLabel = '—';
+  if (t && t.credit_debit != null) {
+    const val = t.credit_debit;
+    cdLabel = val >= 0
+      ? `<span class="optsig-credit">+$${val.toFixed(2)} credit</span>`
+      : `<span class="optsig-debit">-$${Math.abs(val).toFixed(2)} debit</span>`;
+  }
+
+  // Max loss / gain
+  const mlLabel = (t && t.max_loss != null)  ? `$${Math.abs(t.max_loss).toFixed(0)}` : 'Unlimited';
+  const mgLabel = (t && t.max_gain != null)  ? `$${t.max_gain.toFixed(0)}` : 'Unlimited';
+
+  // Reasoning list
+  const reasonsHtml = r.reasons && r.reasons.length
+    ? `<ul class="optsig-reasons">${r.reasons.map(rs => `<li>${esc(rs)}</li>`).join('')}</ul>`
+    : '';
+
+  return `
+    <div class="optsig-card optsig-card-${r.signal.toLowerCase()}">
+      <div class="optsig-card-header">
+        <div class="optsig-card-ticker">
+          <span class="optsig-ticker-sym">${esc(r.ticker)}</span>
+          <span class="optsig-sig-pill ${sigClass}">${esc(r.signal)}</span>
+        </div>
+        <div class="optsig-conf-row">
+          <div class="optsig-conf-bar-wrap">
+            <div class="optsig-conf-bar-fill" style="width:${r.confidence}%;background:${confColor}"></div>
+          </div>
+          <span class="optsig-conf-pct" style="color:${confColor}">${r.confidence}%</span>
+        </div>
+      </div>
+
+      <div class="optsig-card-metrics">
+        <div class="optsig-metric"><span class="optsig-metric-label">PRICE</span><span>$${esc(String(r.spot))}</span></div>
+        <div class="optsig-metric"><span class="optsig-metric-label">IV</span><span>${esc(String(r.current_iv))}%</span></div>
+        <div class="optsig-metric"><span class="optsig-metric-label">IVR</span><span>${r.ivr != null ? r.ivr : '—'}</span></div>
+        <div class="optsig-metric"><span class="optsig-metric-label">RSI</span><span>${esc(String(r.rsi))}</span></div>
+        <div class="optsig-metric"><span class="optsig-metric-label">TREND</span><span>${esc(r.trend)}</span></div>
+      </div>
+
+      ${t ? `
+        <div class="optsig-trade-section">
+          <div class="optsig-trade-header">
+            <span class="optsig-trade-label">Suggested Trade</span>
+            <span class="optsig-trade-expiry">Exp: ${esc(t.expiry)} (${esc(String(t.dte))}d)</span>
+          </div>
+          ${legsHtml}
+          <div class="optsig-trade-summary">
+            <div class="optsig-trade-stat"><span class="optsig-metric-label">NET</span>${cdLabel}</div>
+            <div class="optsig-trade-stat"><span class="optsig-metric-label">MAX GAIN</span><span class="optsig-credit">$${mgLabel}</span></div>
+            <div class="optsig-trade-stat"><span class="optsig-metric-label">MAX LOSS</span><span class="optsig-debit">${mlLabel}</span></div>
+            <div class="optsig-trade-stat"><span class="optsig-metric-label">TARGET</span><span>${t.profit_target_pct}% of credit</span></div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${reasonsHtml}
+    </div>`;
 }
