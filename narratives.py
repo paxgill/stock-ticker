@@ -288,3 +288,245 @@ def generate_trade_description(analysis: dict) -> str:
     # Combine: headline + up to 2 detail sentences
     combined = [headline] + detail_parts[:2]
     return " ".join(combined)
+
+
+# ─── Options Plan Generator ───────────────────────────────────────────────────
+
+def _first_leg_strike(legs: list, leg_type: str, leg_action: str):
+    """Return the strike of the first matching leg, or None."""
+    for lg in legs:
+        if lg.get('type') == leg_type and lg.get('action') == leg_action:
+            s = lg.get('strike')
+            return float(s) if s is not None else None
+    return None
+
+
+def generate_options_plan(rec: dict, strategy_id: str) -> dict | None:
+    """
+    Generate a plain-English trade plan for an options recommendation.
+
+    rec         : one entry from recommend_for_strategy()
+    strategy_id : e.g. 'iron_condor'
+
+    Returns a dict:
+        summary        — one sentence: what the trade bets on
+        order_lines    — list of broker-ticket strings, one per leg
+        max_loss_note  — dollar + plain reason
+        max_gain_note  — dollar or "Unlimited" + plain reason
+        breakeven      — price the stock must be at expiry to break even
+        exit_plan      — specific take-profit / stop-loss / DTE rules
+        is_credit      — bool: True if you receive cash up front
+        net_str        — e.g. "+$145 credit" or "-$80 debit"
+    """
+    ticker = rec.get("ticker", "?")
+    spot   = float(rec.get("spot") or 0)
+    trade  = rec.get("suggested_trade")
+    if not trade:
+        return None
+
+    expiry   = trade.get("expiry", "—")
+    dte      = int(trade.get("dte") or 0)
+    legs     = trade.get("legs") or []
+    cd       = float(trade.get("credit_debit") or 0)   # + credit, - debit
+    max_gain = trade.get("max_gain")
+    max_loss = trade.get("max_loss")
+    pt_pct   = int(trade.get("profit_target_pct") or 50)
+
+    is_credit = cd >= 0
+    net_abs   = abs(cd)
+    net_str   = f"+${net_abs:.0f} credit" if is_credit else f"-${net_abs:.0f} debit"
+
+    # ── Strategy-specific plain-English summary ───────────────────────────────
+    cs_k = _first_leg_strike(legs, "CALL", "SELL")
+    cl_k = _first_leg_strike(legs, "CALL", "BUY")
+    ps_k = _first_leg_strike(legs, "PUT",  "SELL")
+    pl_k = _first_leg_strike(legs, "PUT",  "BUY")
+
+    def fmtk(v): return f"${v:.0f}" if v is not None else "—"
+
+    _SUMMARIES = {
+        "iron_condor": (
+            f"Collect ${net_abs:.0f} cash now, then profit if {ticker} stays "
+            f"between {fmtk(ps_k)} and {fmtk(cs_k)} through {expiry}."
+        ),
+        "iron_butterfly": (
+            f"Collect ${net_abs:.0f} cash now; earn the most if {ticker} closes "
+            f"right at {fmtk(cs_k)} on {expiry}."
+        ),
+        "bull_put_spread": (
+            f"Collect ${net_abs:.0f} cash now by betting {ticker} stays above "
+            f"{fmtk(ps_k)} through {expiry}."
+        ),
+        "bear_call_spread": (
+            f"Collect ${net_abs:.0f} cash now by betting {ticker} stays below "
+            f"{fmtk(cs_k)} through {expiry}."
+        ),
+        "jade_lizard": (
+            f"Collect ${net_abs:.0f} cash now; profit if {ticker} stays above "
+            f"{fmtk(ps_k)} through {expiry} — with no upside risk."
+        ),
+        "the_wheel": (
+            f"Agree to buy {ticker} at {fmtk(ps_k)} if it falls there — and "
+            f"collect ${net_abs:.0f} cash now that you keep no matter what."
+        ),
+        "short_strangle": (
+            f"Collect ${net_abs:.0f} cash now; profit if {ticker} stays "
+            f"between {fmtk(ps_k)} and {fmtk(cs_k)} through {expiry}."
+        ),
+        "short_straddle": (
+            f"Collect ${net_abs:.0f} cash now; profit if {ticker} barely "
+            f"moves from ${spot:.0f} through {expiry}."
+        ),
+        "long_call_put": (
+            f"Pay ${net_abs:.0f} now; profit if {ticker} makes a big move "
+            f"up or down by {expiry}."
+        ),
+        "calendar_spread": (
+            f"Pay ${net_abs:.0f} now; profit if {ticker} stays near ${spot:.0f} "
+            f"while the short option decays faster than the long."
+        ),
+        "diagonal_spread": (
+            f"Pay ${net_abs:.0f} now and collect rent by selling short-dated "
+            f"calls against a longer-term long call."
+        ),
+        "pmcc": (
+            f"Pay ${net_abs:.0f} now for a deep-in-the-money long call, then "
+            f"sell short calls against it to reduce cost — like owning stock cheaply."
+        ),
+        "bwb_call": (
+            f"A low-cost spread; pay ${net_abs:.0f} and profit if {ticker} "
+            f"rises moderately over {dte} days."
+        ),
+        "bwb_put": (
+            f"A low-cost spread; pay ${net_abs:.0f} and profit if {ticker} "
+            f"falls moderately over {dte} days."
+        ),
+        "put_ratio_spread": (
+            f"Collect ${net_abs:.0f} cash now; profit if {ticker} falls to near "
+            f"{fmtk(ps_k)} by {expiry} — be careful of sharp drops past that level."
+        ),
+    }
+    summary = _SUMMARIES.get(
+        strategy_id,
+        f"Enter a {len(legs)}-leg options trade on {ticker} expiring {expiry}.",
+    )
+
+    # ── Broker-ticket order lines ─────────────────────────────────────────────
+    order_lines = []
+    for lg in legs:
+        action = lg.get("action", "")
+        ltype  = lg.get("type", "")
+        strike = lg.get("strike")
+        qty    = lg.get("qty", 1)
+        price  = float(lg.get("price") or 0)
+        leg_exp = lg.get("expiry", expiry)
+
+        if ltype == "STOCK":
+            order_lines.append(f"{action} {qty * 100} shares {ticker} at market")
+        else:
+            order_lines.append(
+                f"{action} {qty} × {ticker} {leg_exp} ${strike} {ltype}"
+                f"  @ ${price:.2f} limit"
+            )
+
+    # ── Max loss note ─────────────────────────────────────────────────────────
+    if max_loss is None:
+        ml_note = (
+            "Unlimited — this trade has no hard cap on losses. "
+            "Only use if you are experienced with margin and assignment risk."
+        )
+    else:
+        ml_abs = abs(max_loss)
+        if is_credit:
+            ml_note = (
+                f"${ml_abs:.0f} — the worst case if the stock moves fully against you. "
+                f"Your broker will require approximately this much as collateral."
+            )
+        else:
+            ml_note = (
+                f"${ml_abs:.0f} — the premium you paid, which you lose entirely "
+                f"if {ticker} doesn't move enough by {expiry}."
+            )
+
+    # ── Max gain note ─────────────────────────────────────────────────────────
+    if max_gain is None:
+        mg_note = (
+            "Unlimited (directional long position) — "
+            "your profit grows as the stock moves in your favor."
+        )
+    else:
+        mg_abs = abs(max_gain)
+        if is_credit:
+            mg_note = (
+                f"${mg_abs:.0f} — the full cash you collected at entry, "
+                f"which you keep when the options expire worthless."
+            )
+        else:
+            mg_note = (
+                f"${mg_abs:.0f} — your best-case profit "
+                f"if {ticker} makes the expected move by {expiry}."
+            )
+
+    # ── Break-even price ─────────────────────────────────────────────────────
+    if is_credit:
+        cpershare = net_abs / 100.0
+        if cs_k and ps_k:
+            be_up  = f"${cs_k + cpershare:.2f}"
+            be_dn  = f"${ps_k - cpershare:.2f}"
+            breakeven = (
+                f"Upper break-even: {be_up}. Lower break-even: {be_dn}. "
+                f"{ticker} must close between these on {expiry} for you to profit."
+            )
+        elif cs_k:
+            breakeven = f"${cs_k + cpershare:.2f} — {ticker} must close below this on {expiry}."
+        elif ps_k:
+            breakeven = f"${ps_k - cpershare:.2f} — {ticker} must close above this on {expiry}."
+        else:
+            breakeven = f"Near ${spot:.2f} (current price)."
+    else:
+        dpershare = net_abs / 100.0
+        if cl_k:
+            breakeven = (
+                f"${cl_k + dpershare:.2f} for the call — {ticker} needs to rise past this. "
+            )
+        elif pl_k:
+            breakeven = (
+                f"${pl_k - dpershare:.2f} for the put — {ticker} needs to fall past this. "
+            )
+        else:
+            breakeven = f"Stock needs to move ${dpershare:.2f} per share to cover your cost."
+
+    # ── Exit plan ─────────────────────────────────────────────────────────────
+    close_dte = max(0, dte - 14)
+    if is_credit and max_gain is not None:
+        tp_dollars = round(abs(max_gain) * pt_pct / 100)
+        sl_dollars = round(abs(max_gain) * 2)
+        exit_plan = (
+            f"Take profit when the position gains ${tp_dollars} ({pt_pct}% of max). "
+            f"Cut your loss if the position reaches a ${sl_dollars} loss (2× premium rule). "
+            f"Close any remaining contracts at {close_dte} DTE to avoid expiration risk."
+        )
+    elif not is_credit and max_loss is not None:
+        sl_pct = 50
+        sl_dollars = round(abs(max_loss) * sl_pct / 100)
+        exit_plan = (
+            f"Take profit at {pt_pct}% gain on your investment. "
+            f"Close if the trade loses ${sl_dollars} ({sl_pct}% of premium paid). "
+            f"Close no later than {close_dte} days before {expiry} to avoid assignment."
+        )
+    else:
+        exit_plan = (
+            f"Set a take-profit and stop-loss with your broker before entering. "
+            f"Close all contracts before {expiry} to avoid expiration complications."
+        )
+
+    return {
+        "summary":      summary,
+        "order_lines":  order_lines,
+        "max_loss_note": ml_note,
+        "max_gain_note": mg_note,
+        "breakeven":    breakeven,
+        "exit_plan":    exit_plan,
+        "is_credit":    is_credit,
+        "net_str":      net_str,
+    }

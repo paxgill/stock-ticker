@@ -13,7 +13,7 @@ import pandas as pd
 
 from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference, FMPCache
 from analysis import analyze_ticker, compute_rsi, compute_rvol, rvol_tier, DEFAULT_PROFILE
-from narratives import fetch_index_data, generate_market_summary, generate_trade_description
+from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -1567,6 +1567,40 @@ def options_summary(ticker):
 from options_signals import recommend_for_strategy, scan_top_n, STRATEGY_CONFIGS
 
 
+def _attach_optsig_extras(results: list, strategy_id: str) -> list:
+    """
+    Mutates each result in-place:
+      1. Adds plain_english_plan via generate_options_plan()
+      2. Adds earnings_risk / earnings_date if earnings fall before expiry
+    """
+    for rec in results:
+        # Plain-English plan
+        try:
+            plan = generate_options_plan(rec, strategy_id)
+            if plan:
+                rec["plain_english_plan"] = plan
+        except Exception:
+            pass
+
+        # Earnings risk
+        trade = rec.get("suggested_trade")
+        if trade and trade.get("expiry"):
+            try:
+                earn_str = _fetch_earnings_date(rec["ticker"])
+                if earn_str:
+                    earn_d   = date.fromisoformat(earn_str)
+                    expiry_d = date.fromisoformat(trade["expiry"])
+                    if earn_d <= expiry_d:
+                        rec["earnings_risk"] = True
+                        rec["earnings_date"] = earn_str
+                        continue
+            except Exception:
+                pass
+        rec.setdefault("earnings_risk", False)
+
+    return results
+
+
 def _parse_param_overrides(args):
     """Extract optional scoring param overrides from query string."""
     overrides = {}
@@ -1620,6 +1654,7 @@ def optsig_recommend(strategy_id):
 
     try:
         results = recommend_for_strategy(strategy_id, tickers, overrides)
+        _attach_optsig_extras(results, strategy_id)
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1655,6 +1690,7 @@ def optsig_scan():
 
     try:
         results = scan_top_n(strategy_id, tickers, top_n, overrides)
+        _attach_optsig_extras(results, strategy_id)
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -2084,3 +2084,168 @@ details[open] .optsig-params-summary::after { content: '▾'; }
   color: var(--text2);
   line-height: 1.7;
 }
+
+/* ── Tooltip icons (Change 2) ─────────────────────────────────────────────── */
+.tip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--text3);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text3);
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  line-height: 1;
+  user-select: none;
+}
+.tip-icon::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 200px;
+  max-width: 270px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text1);
+  line-height: 1.55;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s;
+  z-index: 9999;
+  white-space: normal;
+  font-family: var(--font-mono);
+  text-align: left;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,.35);
+}
+/* Flip tooltip downward when near the top of the panel */
+.tip-icon.tip-down::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+.tip-icon:hover::after,
+.tip-icon:focus::after {
+  opacity: 1;
+}
+.tip-icon:focus { outline: none; border-color: var(--accent); color: var(--accent); }
+
+/* ── Max-loss badge (Change 4) ───────────────────────────────────────────── */
+.optsig-maxloss-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #ef444420;
+  border: 1px solid #ef444466;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: #ef4444;
+  letter-spacing: .4px;
+}
+.optsig-maxloss-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+/* ── Earnings risk banner (Change 5) ─────────────────────────────────────── */
+.optsig-earnings-banner {
+  background: #f59e0b18;
+  border: 1px solid #f59e0b66;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #f59e0b;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+}
+.optsig-earnings-banner strong { font-weight: 700; }
+
+/* ── Plain English Plan block (Change 3) ─────────────────────────────────── */
+.optsig-plan {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.optsig-plan-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.optsig-plan-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.optsig-plan-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg1);
+}
+.optsig-plan-summary {
+  font-size: 13px;
+  color: var(--text1);
+  font-weight: 500;
+  line-height: 1.5;
+}
+.optsig-plan-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.optsig-plan-key {
+  color: var(--text3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  padding-top: 1px;
+}
+.optsig-plan-val { color: var(--text1); line-height: 1.5; }
+.optsig-plan-val.credit { color: #22c55e; }
+.optsig-plan-val.debit  { color: #ef4444; }
+.optsig-plan-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.optsig-plan-order-line {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text1);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+.optsig-plan-order-sell { color: #ef4444; }
+.optsig-plan-order-buy  { color: #22c55e; }

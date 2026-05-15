@@ -3784,21 +3784,47 @@ function _optSigRenderCards(results) {
 
 function _optSigBuildCard(r, stratColor) {
   const sigClass = { OPEN: 'optsig-sig-open', MONITOR: 'optsig-sig-monitor', AVOID: 'optsig-sig-avoid' }[r.signal] || '';
-  const t = r.suggested_trade;
+  const t   = r.suggested_trade;
+  const pep = r.plain_english_plan;   // Change 3
 
   // Confidence bar
   const confColor = r.confidence >= 65 ? '#22c55e' : r.confidence >= 38 ? '#f59e0b' : '#ef4444';
 
-  // Legs table
+  // ── Change 4: Max-loss badge (prominent, top of card) ─────────────────────
+  const mlBadge = (() => {
+    if (!t) return '';
+    const ml = t.max_loss;
+    if (ml == null) {
+      return `<div class="optsig-maxloss-row">
+        <span class="optsig-maxloss-badge">⚠ MAX LOSS: UNLIMITED</span>
+      </div>`;
+    }
+    return `<div class="optsig-maxloss-row">
+      <span class="optsig-maxloss-badge">MAX LOSS: $${Math.abs(ml).toFixed(0)}</span>
+    </div>`;
+  })();
+
+  // ── Change 5: Earnings risk banner ────────────────────────────────────────
+  const earnBanner = r.earnings_risk
+    ? `<div class="optsig-earnings-banner">
+        ⚠ <strong>EARNINGS RISK:</strong> ${esc(r.ticker)} reports on
+        <strong>${esc(r.earnings_date)}</strong>, before this option expires.
+        Options often lose value after earnings even if you're right on direction
+        (IV crush). Consider an expiration <em>after</em> ${esc(r.earnings_date)},
+        or wait until after the report.
+       </div>`
+    : '';
+
+  // Legs table (power-user detail)
   let legsHtml = '';
   if (t && t.legs && t.legs.length) {
     legsHtml = `<table class="optsig-legs-table">
       <thead><tr><th>Action</th><th>Type</th><th>Strike</th><th>Qty</th><th>~Price</th></tr></thead>
       <tbody>
         ${t.legs.map(l => {
-          const actionClass = l.action === 'SELL' ? 'optsig-leg-sell' : (l.action === 'BUY' ? 'optsig-leg-buy' : '');
+          const ac = l.action === 'SELL' ? 'optsig-leg-sell' : (l.action === 'BUY' ? 'optsig-leg-buy' : '');
           return `<tr>
-            <td class="${actionClass}">${esc(l.action)}</td>
+            <td class="${ac}">${esc(l.action)}</td>
             <td>${esc(l.type)}</td>
             <td>$${esc(String(l.strike))}</td>
             <td>${esc(String(l.qty))}</td>
@@ -3818,54 +3844,129 @@ function _optSigBuildCard(r, stratColor) {
       : `<span class="optsig-debit">-$${Math.abs(val).toFixed(2)} debit</span>`;
   }
 
-  // Max loss / gain
-  const mlLabel = (t && t.max_loss != null)  ? `$${Math.abs(t.max_loss).toFixed(0)}` : 'Unlimited';
-  const mgLabel = (t && t.max_gain != null)  ? `$${t.max_gain.toFixed(0)}` : 'Unlimited';
+  const mlLabel = (t && t.max_loss != null) ? `$${Math.abs(t.max_loss).toFixed(0)}` : 'Unlimited';
+  const mgLabel = (t && t.max_gain != null) ? `$${t.max_gain.toFixed(0)}` : 'Unlimited';
 
-  // Reasoning list
+  // ── Change 3: Plain English Plan block ────────────────────────────────────
+  const planHtml = pep ? `
+    <div class="optsig-plan">
+      <div class="optsig-plan-header">
+        <span class="optsig-plan-title">📋 Plain English Plan</span>
+      </div>
+      <div class="optsig-plan-body">
+        <div class="optsig-plan-summary">${esc(pep.summary)}</div>
+
+        <div class="optsig-plan-row">
+          <span class="optsig-plan-key">ORDER</span>
+          <div class="optsig-plan-orders">
+            ${(pep.order_lines || []).map(ol => {
+              const isSell = ol.startsWith('SELL');
+              const isBuy  = ol.startsWith('BUY');
+              const cls    = isSell ? 'optsig-plan-order-sell' : (isBuy ? 'optsig-plan-order-buy' : '');
+              return `<span class="optsig-plan-order-line ${cls}">${esc(ol)}</span>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <div class="optsig-plan-row">
+          <span class="optsig-plan-key">MAX LOSS</span>
+          <span class="optsig-plan-val debit">${esc(pep.max_loss_note)}</span>
+        </div>
+
+        <div class="optsig-plan-row">
+          <span class="optsig-plan-key">MAX GAIN</span>
+          <span class="optsig-plan-val credit">${esc(pep.max_gain_note)}</span>
+        </div>
+
+        <div class="optsig-plan-row">
+          <span class="optsig-plan-key">BREAK-EVEN</span>
+          <span class="optsig-plan-val">${esc(pep.breakeven)}</span>
+        </div>
+
+        <div class="optsig-plan-row">
+          <span class="optsig-plan-key">EXIT PLAN</span>
+          <span class="optsig-plan-val">${esc(pep.exit_plan)}</span>
+        </div>
+      </div>
+    </div>` : '';
+
+  // Reasoning list (why this ticker scored the way it did)
   const reasonsHtml = r.reasons && r.reasons.length
-    ? `<ul class="optsig-reasons">${r.reasons.map(rs => `<li>${esc(rs)}</li>`).join('')}</ul>`
+    ? `<details class="optsig-reasons-wrap">
+         <summary class="optsig-reasons-toggle">Why this score? ▸</summary>
+         <ul class="optsig-reasons">${r.reasons.map(rs => `<li>${esc(rs)}</li>`).join('')}</ul>
+       </details>`
     : '';
+
+  // ── Metrics row with tooltips ─────────────────────────────────────────────
+  const metricTips = {
+    'PRICE':  'Current market price of the stock.',
+    'IV':     'Implied Volatility — how much the market expects the stock to move. Higher = pricier options.',
+    'IVR':    'IV Rank 0–100: where current IV sits vs. the past year. High = sell premium; Low = buy options.',
+    'RSI':    'Momentum 0–100. Below 30 = oversold. Above 70 = overbought. 30–70 = neutral.',
+    'TREND':  'Bullish = trending up (above moving averages). Bearish = trending down. Consolidating = sideways.',
+  };
+  const metricsHtml = `
+    <div class="optsig-card-metrics">
+      ${[
+        ['PRICE',  `$${esc(String(r.spot))}`],
+        ['IV',     `${esc(String(r.current_iv))}%`],
+        ['IVR',    r.ivr != null ? String(r.ivr) : '—'],
+        ['RSI',    esc(String(r.rsi))],
+        ['TREND',  esc(r.trend)],
+      ].map(([label, val]) => `
+        <div class="optsig-metric">
+          <span class="optsig-metric-label">
+            ${label}
+            <span class="tip-icon tip-down" tabindex="0" data-tip="${esc(metricTips[label] || label)}">?</span>
+          </span>
+          <span>${val}</span>
+        </div>`).join('')}
+    </div>`;
 
   return `
     <div class="optsig-card optsig-card-${r.signal.toLowerCase()}">
+      <!-- Header: ticker + signal + max-loss badge (Change 4) -->
       <div class="optsig-card-header">
         <div class="optsig-card-ticker">
           <span class="optsig-ticker-sym">${esc(r.ticker)}</span>
           <span class="optsig-sig-pill ${sigClass}">${esc(r.signal)}</span>
         </div>
+        ${mlBadge}
         <div class="optsig-conf-row">
           <div class="optsig-conf-bar-wrap">
             <div class="optsig-conf-bar-fill" style="width:${r.confidence}%;background:${confColor}"></div>
           </div>
-          <span class="optsig-conf-pct" style="color:${confColor}">${r.confidence}%</span>
+          <span class="optsig-conf-pct" style="color:${confColor}">${r.confidence}% match</span>
         </div>
       </div>
 
-      <div class="optsig-card-metrics">
-        <div class="optsig-metric"><span class="optsig-metric-label">PRICE</span><span>$${esc(String(r.spot))}</span></div>
-        <div class="optsig-metric"><span class="optsig-metric-label">IV</span><span>${esc(String(r.current_iv))}%</span></div>
-        <div class="optsig-metric"><span class="optsig-metric-label">IVR</span><span>${r.ivr != null ? r.ivr : '—'}</span></div>
-        <div class="optsig-metric"><span class="optsig-metric-label">RSI</span><span>${esc(String(r.rsi))}</span></div>
-        <div class="optsig-metric"><span class="optsig-metric-label">TREND</span><span>${esc(r.trend)}</span></div>
-      </div>
+      <!-- Change 5: Earnings banner (if applicable) -->
+      ${earnBanner}
+
+      <!-- Change 3: Plain English Plan (first thing beginner sees) -->
+      ${planHtml}
+
+      <!-- Metrics row with inline tooltips -->
+      ${metricsHtml}
 
       ${t ? `
         <div class="optsig-trade-section">
           <div class="optsig-trade-header">
-            <span class="optsig-trade-label">Suggested Trade</span>
-            <span class="optsig-trade-expiry">Exp: ${esc(t.expiry)} (${esc(String(t.dte))}d)</span>
+            <span class="optsig-trade-label">Broker Details</span>
+            <span class="optsig-trade-expiry">Exp: ${esc(t.expiry)} (${esc(String(t.dte))} days)</span>
           </div>
           ${legsHtml}
           <div class="optsig-trade-summary">
             <div class="optsig-trade-stat"><span class="optsig-metric-label">NET</span>${cdLabel}</div>
-            <div class="optsig-trade-stat"><span class="optsig-metric-label">MAX GAIN</span><span class="optsig-credit">$${mgLabel}</span></div>
+            <div class="optsig-trade-stat"><span class="optsig-metric-label">MAX GAIN</span><span class="optsig-credit">${mgLabel}</span></div>
             <div class="optsig-trade-stat"><span class="optsig-metric-label">MAX LOSS</span><span class="optsig-debit">${mlLabel}</span></div>
             <div class="optsig-trade-stat"><span class="optsig-metric-label">TARGET</span><span>${t.profit_target_pct}% of credit</span></div>
           </div>
         </div>
       ` : ''}
 
+      <!-- Why this score (collapsible) -->
       ${reasonsHtml}
     </div>`;
 }

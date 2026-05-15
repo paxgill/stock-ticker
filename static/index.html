@@ -374,57 +374,87 @@
         <div class="optsig-params-body">
           <div class="optsig-param-grid">
             <div class="optsig-param-group">
-              <label class="setting-label">IVR MIN <span class="optsig-param-val" id="optsig-ivr-min-v">—</span></label>
+              <label class="setting-label">
+                Option price level (IV Rank) — min
+                <span class="tip-icon" tabindex="0"
+                  data-tip="IV Rank 0–100: 0 = cheapest options in a year, 100 = most expensive. High IV = good to sell premium.">?</span>
+                <span class="optsig-param-val" id="optsig-ivr-min-v">—</span>
+              </label>
               <input type="range" id="optsig-ivr-min" min="0" max="100" value="0"
                      oninput="optSigParamChange('ivr_min',this.value)">
             </div>
             <div class="optsig-param-group">
-              <label class="setting-label">IVR MAX <span class="optsig-param-val" id="optsig-ivr-max-v">—</span></label>
+              <label class="setting-label">
+                Option price level (IV Rank) — max
+                <span class="tip-icon" tabindex="0"
+                  data-tip="IV Rank 0–100: 0 = cheapest options in a year, 100 = most expensive. Low IV = good to buy options.">?</span>
+                <span class="optsig-param-val" id="optsig-ivr-max-v">—</span>
+              </label>
               <input type="range" id="optsig-ivr-max" min="0" max="100" value="100"
                      oninput="optSigParamChange('ivr_max',this.value)">
             </div>
             <div class="optsig-param-group">
-              <label class="setting-label">DTE TARGET</label>
+              <label class="setting-label">
+                Days until expiration (DTE)
+                <span class="tip-icon" tabindex="0"
+                  data-tip="How many days until the option expires. 30–45 days is typical. Shorter = faster decay, higher risk.">?</span>
+              </label>
               <input type="number" id="optsig-dte" min="7" max="365" value="45" class="number-input"
                      oninput="optSigParamChange('dte_entry',this.value)" style="width:70px">
             </div>
             <div class="optsig-param-group">
-              <label class="setting-label">PROFIT TARGET %</label>
+              <label class="setting-label">
+                Take profit at (% of max profit)
+                <span class="tip-icon" tabindex="0"
+                  data-tip="Close the trade early once you've captured this percentage of the max possible gain. 50% is the standard rule.">?</span>
+              </label>
               <input type="number" id="optsig-pt" min="10" max="100" value="50" class="number-input"
                      oninput="optSigParamChange('profit_target_pct',this.value)" style="width:70px">
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
             <div class="optsig-param-group">
-              <label class="setting-label">RSI SIGNAL</label>
+              <label class="setting-label">
+                Stock momentum (RSI)
+                <span class="tip-icon" tabindex="0"
+                  data-tip="RSI measures recent price speed. Below 30 = oversold (possible bounce). Above 70 = overbought (possible pullback). 30–70 = neutral.">?</span>
+              </label>
               <select id="optsig-rsi-signal" onchange="optSigParamChange('rsi_signal',this.value)">
-                <option value="neutral">Neutral</option>
-                <option value="oversold">Oversold</option>
-                <option value="overbought">Overbought</option>
-                <option value="any">Any</option>
+                <option value="neutral">Neutral (30–70)</option>
+                <option value="oversold">Oversold — below 35</option>
+                <option value="overbought">Overbought — above 65</option>
+                <option value="any">Any momentum</option>
               </select>
             </div>
             <div class="optsig-param-group">
-              <label class="setting-label">IV REGIME</label>
+              <label class="setting-label">
+                Are options cheap or expensive? (IV Regime)
+                <span class="tip-icon" tabindex="0"
+                  data-tip="High IV = options are expensive — good time to sell. Low IV = options are cheap — good time to buy.">?</span>
+              </label>
               <select id="optsig-iv-regime" onchange="optSigParamChange('iv_regime',this.value)">
-                <option value="any">Any</option>
-                <option value="high">High IV</option>
-                <option value="low">Low IV</option>
+                <option value="any">Either</option>
+                <option value="high">Expensive (High IV) — sell premium</option>
+                <option value="low">Cheap (Low IV) — buy options</option>
               </select>
             </div>
             <div class="optsig-param-group">
-              <label class="setting-label">TREND</label>
+              <label class="setting-label">
+                Stock trend direction
+                <span class="tip-icon" tabindex="0"
+                  data-tip="Which direction is the stock moving? Bullish = going up. Bearish = going down. Consolidating = stuck in a range.">?</span>
+              </label>
               <select id="optsig-trend" onchange="optSigParamChange('trend_requirement',this.value)">
-                <option value="any">Any</option>
-                <option value="bullish">Bullish</option>
-                <option value="bearish">Bearish</option>
-                <option value="consolidating">Consolidating</option>
+                <option value="any">Any direction</option>
+                <option value="bullish">Bullish — trending up</option>
+                <option value="bearish">Bearish — trending down</option>
+                <option value="consolidating">Consolidating — moving sideways</option>
               </select>
             </div>
           </div>
           <!-- Extra tickers -->
           <div class="optsig-extra-tickers" style="margin-top:10px">
-            <label class="setting-label">ADD TICKERS TO SCAN</label>
+            <label class="setting-label">Add more stocks to scan</label>
             <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
               <input type="text" id="optsig-extra-input" placeholder="SPY, QQQ, TSLA..."
                      autocapitalize="characters" spellcheck="false" class="inline-text-input"
