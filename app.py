@@ -12,7 +12,10 @@ import yfinance as yf
 import pandas as pd
 
 from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference, FMPCache
-from analysis import analyze_ticker, compute_rsi, compute_rvol, rvol_tier, DEFAULT_PROFILE
+from analysis import (
+    analyze_ticker, compute_rsi, compute_rvol, rvol_tier,
+    smooth_prices, detect_surge_crash, DEFAULT_PROFILE,
+)
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
@@ -1692,6 +1695,67 @@ def optsig_scan():
         results = scan_top_n(strategy_id, tickers, top_n, overrides)
         _attach_optsig_extras(results, strategy_id)
         return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Surge / Crash Detection ─────────────────────────────────────────────────
+@app.route("/api/surge-crash/<ticker>")
+def surge_crash(ticker):
+    """
+    Return the N largest single-day price moves for a ticker.
+
+    Query params
+    ------------
+    type      : 'surge' (default) | 'crash'
+    n         : int 1–50, default 10
+    period    : yfinance history period string, default '1y'
+                (e.g. '3mo', '6mo', '1y', '2y', '5y', 'max')
+
+    Response (200)
+    --------------
+    {
+      "ticker":  "AAPL",
+      "type":    "surge",
+      "period":  "1y",
+      "results": [
+        {"date": "2024-02-16", "change": 4.82},
+        ...
+      ]
+    }
+    """
+    symbol = ticker.upper()
+
+    detect_type = request.args.get("type", "surge").lower()
+    if detect_type not in ("surge", "crash"):
+        return jsonify({"error": "type must be 'surge' or 'crash'"}), 400
+
+    try:
+        n = max(1, min(50, int(request.args.get("n", 10))))
+    except (TypeError, ValueError):
+        n = 10
+
+    period = request.args.get("period", "1y")
+    # Whitelist recognised period strings to avoid arbitrary yfinance calls
+    valid_periods = {"1mo", "3mo", "6mo", "1y", "2y", "3y", "5y", "10y", "max"}
+    if period not in valid_periods:
+        period = "1y"
+
+    try:
+        t    = yf.Ticker(symbol)
+        hist = t.history(period=period)
+        if hist is None or hist.empty:
+            return jsonify({"error": f"No data for {symbol}"}), 404
+
+        dates, changes = detect_surge_crash(hist, detect_type=detect_type, num_output=n)
+
+        results = [{"date": d, "change": c} for d, c in zip(dates, changes)]
+        return jsonify({
+            "ticker":  symbol,
+            "type":    detect_type,
+            "period":  period,
+            "results": results,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

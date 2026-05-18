@@ -35,6 +35,29 @@ def rvol_tier(rvol: float) -> str:
     return "In Play"
 
 
+def smooth_prices(closes: pd.Series, window_size: int = 5, smooth_type: str = "mean") -> pd.Series:
+    """
+    Apply a causal (no look-ahead) rolling smoothing to a price Series.
+
+    Parameters
+    ----------
+    closes      : pd.Series of close prices, already cast to float
+    window_size : int   — rolling window length (≥1); values before the window
+                         is full are zero-padded (min_periods=1 fills with
+                         whatever data is available, giving a warm-up ramp)
+    smooth_type : 'mean' | 'median'
+
+    Returns
+    -------
+    pd.Series   — same length and index as input, smoothed values
+    """
+    if window_size <= 1:
+        return closes.copy()
+    if smooth_type == "median":
+        return closes.rolling(window=window_size, min_periods=1).median()
+    return closes.rolling(window=window_size, min_periods=1).mean()
+
+
 def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | None:
     """
     Returns signal dict or None if insufficient data.
@@ -45,10 +68,16 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
     if hist is None or len(hist) < 20:
         return None
 
-    closes = hist["Close"].astype(float)
-    volumes = hist["Volume"].astype(float)
-    current_price = float(closes.iloc[-1])
-    prev_price = float(closes.iloc[-2]) if len(closes) > 1 else current_price
+    closes_raw = hist["Close"].astype(float)
+    volumes    = hist["Volume"].astype(float)
+
+    # Smooth close prices before signal computation to reduce single-bar noise.
+    # All four signals use the smoothed series; current_price/prev_price always
+    # report the real (unsmoothed) last close so the UI shows the actual price.
+    closes = smooth_prices(closes_raw, window_size=5, smooth_type="mean")
+
+    current_price = float(closes_raw.iloc[-1])          # always report real last price
+    prev_price    = float(closes_raw.iloc[-2]) if len(closes_raw) > 1 else current_price
     price_up = current_price >= prev_price
 
     rvol = compute_rvol(volumes)
@@ -348,6 +377,65 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
         "rvol":         round(rvol, 2),
         "rvol_tier":    rvol_label,
     }
+
+
+def detect_surge_crash(
+    hist: pd.DataFrame,
+    detect_type: str = "surge",
+    num_output: int = 5,
+) -> tuple[list[str], list[float]]:
+    """
+    Find the largest single-day price moves in a yfinance history DataFrame.
+
+    A daily move is defined as  Close - Open  for that bar, which captures
+    the intraday directional range without being distorted by overnight gaps.
+
+    Parameters
+    ----------
+    hist        : pd.DataFrame — yfinance .history() result with 'Open' and
+                  'Close' columns; the index must be DatetimeIndex or
+                  date-castable.
+    detect_type : 'surge'  — largest positive  (Close > Open) days, biggest first
+                  'crash'  — largest negative  (Close < Open) days, most-negative first
+    num_output  : int — how many results to return (clamped to available rows)
+
+    Returns
+    -------
+    (dates, changes) — two parallel lists
+        dates   : list[str]   ISO date strings ('YYYY-MM-DD')
+        changes : list[float] daily Close-Open dollar change, sorted by magnitude
+    """
+    if hist is None or hist.empty:
+        return [], []
+
+    required = {"Open", "Close"}
+    if not required.issubset(hist.columns):
+        return [], []
+
+    df = hist[["Open", "Close"]].copy()
+    df["change"] = df["Close"].astype(float) - df["Open"].astype(float)
+
+    detect_type = (detect_type or "surge").lower()
+    if detect_type == "crash":
+        # Keep only negative days, sort most-negative first
+        df = df[df["change"] < 0].sort_values("change", ascending=True)
+    else:
+        # surge: keep only positive days, sort largest first
+        df = df[df["change"] > 0].sort_values("change", ascending=False)
+
+    num_output = max(1, int(num_output))
+    df = df.head(num_output)
+
+    # Normalise index to plain date strings regardless of tz-aware DatetimeIndex
+    def _to_date_str(idx_val) -> str:
+        try:
+            return idx_val.date().isoformat()
+        except AttributeError:
+            return str(idx_val)[:10]
+
+    dates   = [_to_date_str(i) for i in df.index]
+    changes = [round(float(v), 4) for v in df["change"]]
+    return dates, changes
 
 
 DEFAULT_PROFILE = {
