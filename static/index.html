@@ -141,6 +141,7 @@
               <span class="slider-val" id="w-mom-val">25%</span>
             </div>
           </div>
+          <div class="weight-sum" id="ob-weight-sum">Total: 100% ✓</div>
         </div>
         <div class="profile-row three-col">
           <div class="mini-field">
@@ -166,7 +167,7 @@
       </div>
       <div class="ob-nav">
         <button class="btn-ghost" onclick="goStep(2)">← BACK</button>
-        <button class="btn-primary" onclick="goStep(4)">NEXT →</button>
+        <button class="btn-primary" id="step3-next" onclick="goStep(4)">NEXT →</button>
       </div>
     </div>
 
@@ -652,6 +653,7 @@
           <div class="slider-row"><span class="slider-lbl">RSI Signal</span>  <input type="range" min="0" max="100" value="25" id="pe-w-rsi" oninput="rebalancePeWeight('rsi',this.value)"><span class="slider-val" id="pe-w-rsi-v">25%</span></div>
           <div class="slider-row"><span class="slider-lbl">Momentum</span>    <input type="range" min="0" max="100" value="25" id="pe-w-mom" oninput="rebalancePeWeight('mom',this.value)"><span class="slider-val" id="pe-w-mom-v">25%</span></div>
         </div>
+        <div class="weight-sum" id="pe-weight-sum">Total: 100% ✓</div>
       </div>
       <div class="setting-group three-col">
         <div class="mini-field"><label class="setting-label">RSI OB</label><input type="number" id="pe-rsi-ob" value="70" min="60" max="90" class="number-input"></div>
@@ -668,7 +670,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" onclick="closeModal('profile-modal')">CANCEL</button>
-        <button class="btn-primary" onclick="saveProfile()">SAVE PROFILE</button>
+        <button class="btn-primary" id="pe-save-btn" onclick="saveProfile()">SAVE PROFILE</button>
       </div>
     </div>
   </div>

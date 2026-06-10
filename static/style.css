@@ -101,6 +101,30 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
 .slider-val { font-size: 11px; color: var(--accent); width: 36px; text-align: right; }
 
+.weight-sum { margin-top: 6px; font-size: 11px; color: var(--text3); text-align: right; letter-spacing: 0.04em; }
+.weight-sum-bad { color: #e5484d; font-weight: 600; }
+
+/* In-app confirm dialog (replaces native confirm) */
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.confirm-box {
+  background: var(--surface, #161b23);
+  border: 1px solid var(--border, #262d38);
+  border-radius: 6px;
+  max-width: 380px; width: 100%;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.confirm-title { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 8px; }
+.confirm-msg   { font-size: 13px; color: var(--text2, #9a9aae); line-height: 1.5; margin-bottom: 18px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn-danger { background: #e5484d !important; border-color: #e5484d !important; color: #fff !important; }
+.btn-danger:hover { background: #cf3a3f !important; }
+
 .three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .mini-field { display: flex; flex-direction: column; gap: 6px; }
 .mini-field label { font-size: 10px; color: var(--text3); letter-spacing: 0.1em; }

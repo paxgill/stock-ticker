@@ -53,6 +53,34 @@ const api = {
   del:  (url)        => _apiFetch(url, { method: 'DELETE' }),
 };
 
+// Styled in-app confirm — replaces native confirm() (BUG-017). Returns a
+// Promise<boolean>. Injects its own DOM so no markup changes are required.
+function confirmDialog(message, { title = 'Please confirm', confirmText = 'Confirm', danger = true } = {}) {
+  return new Promise(resolve => {
+    document.getElementById('confirm-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'confirm-overlay';
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box" role="alertdialog" aria-modal="true" aria-label="${esc(title)}">
+        <div class="confirm-title">${esc(title)}</div>
+        <div class="confirm-msg">${esc(message)}</div>
+        <div class="confirm-actions">
+          <button class="btn-ghost" id="confirm-cancel">Cancel</button>
+          <button class="btn-primary${danger ? ' btn-danger' : ''}" id="confirm-ok">${esc(confirmText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); else if (e.key === 'Enter') close(true); };
+    overlay.querySelector('#confirm-ok').onclick = () => close(true);
+    overlay.querySelector('#confirm-cancel').onclick = () => close(false);
+    overlay.onclick = (e) => { if (e.target === overlay) close(false); };
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('#confirm-ok').focus();
+  });
+}
+
 // ════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════
@@ -167,6 +195,7 @@ function goStep(n) {
   });
   document.getElementById(`step-${n}`).classList.add('active');
   if (n === 2) renderAlertInputs();
+  if (n === 3) _updateWeightSum(k => `w-${k}`, 'ob-weight-sum', 'step3-next');
 }
 
 // ── Weight slider rebalancing (BUG-005) ─────────────────────────────────────
@@ -198,12 +227,30 @@ function _rebalanceSliders(keys, changedKey, newVal, sliderIdFn, labelIdFn) {
 }
 
 // Onboarding sliders (IDs: w-ma / w-ma-val)
+// Live weight-sum readout + safety gate. Sliders auto-rebalance to 100, but
+// this guards against any drift and satisfies the "weights must add to 100%"
+// contract on both the onboarding step and the profile editor.
+function _updateWeightSum(sliderIdFn, sumElId, btnId) {
+  const sum = ['ma', 'vol', 'rsi', 'mom']
+    .reduce((a, k) => a + (parseInt(document.getElementById(sliderIdFn(k))?.value) || 0), 0);
+  const ok = Math.abs(sum - 100) <= 1;
+  const sumEl = document.getElementById(sumElId);
+  if (sumEl) {
+    sumEl.textContent = ok ? `Total: ${sum}% ✓` : `Total: ${sum}% — must equal 100%`;
+    sumEl.classList.toggle('weight-sum-bad', !ok);
+  }
+  const btn = document.getElementById(btnId);
+  if (btn) btn.disabled = !ok;
+  return ok;
+}
+
 function rebalanceObWeight(key, val) {
   _rebalanceSliders(
     ['ma', 'vol', 'rsi', 'mom'], key, val,
     k => `w-${k}`,
     k => `w-${k}-val`
   );
+  _updateWeightSum(k => `w-${k}`, 'ob-weight-sum', 'step3-next');
 }
 
 // Profile-editor sliders (IDs: pe-w-ma / pe-w-ma-v)
@@ -213,6 +260,7 @@ function rebalancePeWeight(key, val) {
     k => `pe-w-${k}`,
     k => `pe-w-${k}-v`
   );
+  _updateWeightSum(k => `pe-w-${k}`, 'pe-weight-sum', 'pe-save-btn');
 }
 
 // Legacy single-slider display update (kept for any remaining callers)
@@ -871,7 +919,7 @@ async function savePosition() {
 }
 
 async function deletePosition(id) {
-  if (!confirm('Remove this position?')) return;
+  if (!await confirmDialog('Remove this position from your portfolio?', { title: 'Remove position', confirmText: 'Remove' })) return;
   await api.del(`/api/portfolio/${id}`);
   S.portfolio = S.portfolio.filter(p => p.id !== id);
   renderPortfolio();
@@ -1048,7 +1096,7 @@ async function saveTrade() {
 }
 
 async function deleteTrade(id) {
-  if (!confirm('Delete this trade?')) return;
+  if (!await confirmDialog('Delete this trade from your journal?', { title: 'Delete trade', confirmText: 'Delete' })) return;
   await api.del(`/api/trades/${id}`);
   S.trades = S.trades.filter(t => t.id !== id);
   renderJournal();
@@ -1170,8 +1218,9 @@ function renderSettingsAlerts() {
     <div class="alert-row-settings">
       <span class="sym">${t.symbol}</span>
       <select id="sadir-${t.symbol}" onchange="saveAlertSettings('${t.symbol}')">
-        <option value="above" ${t.alert_direction === 'above' ? 'selected' : ''}>ABOVE</option>
-        <option value="below" ${t.alert_direction === 'below' ? 'selected' : ''}>BELOW</option>
+        <option value="" ${!t.alert_direction ? 'selected' : ''}>— no alert —</option>
+        <option value="above" ${t.alert_direction === 'above' ? 'selected' : ''}>Above</option>
+        <option value="below" ${t.alert_direction === 'below' ? 'selected' : ''}>Below</option>
       </select>
       <input type="number" step="0.01" min="0" id="saprice-${t.symbol}"
         value="${t.alert_price || ''}" placeholder="price"
@@ -1181,15 +1230,20 @@ function renderSettingsAlerts() {
 
 async function saveAlertSettings(sym) {
   const price = parseFloat(document.getElementById(`saprice-${sym}`)?.value);
-  const dir = document.getElementById(`sadir-${sym}`)?.value || 'above';
-  const update = { alert_direction: dir, alert_price: isNaN(price) ? null : price };
+  const dirRaw = document.getElementById(`sadir-${sym}`)?.value || '';
+  // Empty selection means "no alert" — clear both direction and price
+  const dir = dirRaw === 'above' || dirRaw === 'below' ? dirRaw : null;
+  const update = {
+    alert_direction: dir,
+    alert_price: dir && !isNaN(price) ? price : null,
+  };
   await api.put(`/api/watchlist/${sym}`, update);
   const item = S.watchlist.find(t => t.symbol === sym);
   if (item) { item.alert_direction = update.alert_direction; item.alert_price = update.alert_price; }
 }
 
 async function resetApp() {
-  if (!confirm('This will delete ALL data (watchlist, portfolio, trades, profiles). Are you sure?')) return;
+  if (!await confirmDialog('This deletes all data — watchlist, portfolio, trades, and profiles. This cannot be undone.', { title: 'Reset everything', confirmText: 'Delete all data' })) return;
   // Delete all watchlist items
   for (const t of [...S.watchlist]) await api.del(`/api/watchlist/${t.symbol}`);
   for (const p of [...S.portfolio]) await api.del(`/api/portfolio/${p.id}`);
@@ -1673,6 +1727,7 @@ function openProfileEditor(id) {
   setSlider('pe-w-vol', profile?.volume_weight ?? 0.25);
   setSlider('pe-w-rsi', profile?.rsi_weight ?? 0.25);
   setSlider('pe-w-mom', profile?.momentum_weight ?? 0.25);
+  _updateWeightSum(k => `pe-w-${k}`, 'pe-weight-sum', 'pe-save-btn');
 
   document.getElementById('pe-rsi-ob').value = profile?.rsi_overbought ?? 70;
   document.getElementById('pe-rsi-os').value = profile?.rsi_oversold ?? 30;
@@ -1725,7 +1780,7 @@ async function activateProfile(id) {
 }
 
 async function deleteProfile(id) {
-  if (!confirm('Delete this profile?')) return;
+  if (!await confirmDialog('Delete this analysis profile?', { title: 'Delete profile', confirmText: 'Delete' })) return;
   await api.del(`/api/profiles/${id}`);
   S.profiles = S.profiles.filter(p => p.id !== id);
   if (S.activeProfile?.id === id) S.activeProfile = null;

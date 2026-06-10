@@ -37,11 +37,45 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
+def _existing_columns(table_name: str) -> set:
+    """Column names for a table, dialect-aware (SQLite PRAGMA / Postgres catalog)."""
+    try:
+        insp = db.inspect(db.engine)
+        return {c["name"] for c in insp.get_columns(table_name)}
+    except Exception:
+        return set()
+
+
+# Additive schema migrations applied at startup — no Alembic dependency.
+# Each entry is (table, column, column_ddl). New columns must be nullable or
+# carry a default so existing rows remain valid. Both SQLite and Postgres are
+# supported: we check the live column set first (inspector reads PRAGMA
+# table_info on SQLite, the information_schema on Postgres) and only ALTER when
+# the column is genuinely missing — which is effectively "ADD COLUMN IF NOT
+# EXISTS" on every dialect.
+SCHEMA_MIGRATIONS = [
+    # Populated by later phases, e.g. ("watchlist", "tags", "VARCHAR(255)").
+]
+
+
+def migrate_schema():
+    """Idempotently add any columns introduced after the initial deploy."""
+    for table, column, ddl in SCHEMA_MIGRATIONS:
+        if column in _existing_columns(table):
+            continue
+        try:
+            db.session.execute(db.text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+
 with app.app_context():
     db.create_all()
-    # Prune FMP cache rows older than 90 days to prevent unbounded growth
+    migrate_schema()
+    # Prune FMP cache rows older than 30 days to prevent unbounded growth
     try:
-        cutoff = datetime.utcnow() - timedelta(days=90)
+        cutoff = datetime.utcnow() - timedelta(days=30)
         FMPCache.query.filter(FMPCache.cached_at < cutoff).delete()
         db.session.commit()
     except Exception:
@@ -697,6 +731,17 @@ def get_profiles():
     return jsonify([p.to_dict() for p in profiles])
 
 
+def _validate_weights(ma, vol, rsi, mom):
+    """The four signal weights must sum to ~1.0 (UI shows them as % summing to 100)."""
+    try:
+        total = float(ma) + float(vol) + float(rsi) + float(mom)
+    except (TypeError, ValueError):
+        return "Signal weights must be numbers"
+    if abs(total - 1.0) > 0.01:
+        return f"Signal weights must sum to 100% (got {round(total * 100)}%)"
+    return None
+
+
 @app.route("/api/profiles", methods=["POST"])
 def create_profile():
     d = request.json or {}
@@ -704,6 +749,12 @@ def create_profile():
     rsi_os = float(d.get("rsi_oversold",  30.0))
     if rsi_os >= rsi_ob:
         return jsonify({"error": "RSI Oversold must be less than RSI Overbought"}), 400
+    werr = _validate_weights(
+        d.get("ma_weight", 0.25), d.get("volume_weight", 0.25),
+        d.get("rsi_weight", 0.25), d.get("momentum_weight", 0.25),
+    )
+    if werr:
+        return jsonify({"error": werr}), 400
     profile = AnalysisProfile(
         name=d.get("name", "New Profile"),
         risk_tolerance=d.get("risk_tolerance", "Moderate"),
@@ -735,6 +786,15 @@ def update_profile(pid):
     rsi_os = float(d.get("rsi_oversold",  profile.rsi_oversold))
     if rsi_os >= rsi_ob:
         return jsonify({"error": "RSI Oversold must be less than RSI Overbought"}), 400
+    # Validate the merged weight set (existing values + any incoming overrides)
+    werr = _validate_weights(
+        d.get("ma_weight",       profile.ma_weight),
+        d.get("volume_weight",   profile.volume_weight),
+        d.get("rsi_weight",      profile.rsi_weight),
+        d.get("momentum_weight", profile.momentum_weight),
+    )
+    if werr:
+        return jsonify({"error": werr}), 400
     fields = [
         "name", "risk_tolerance", "horizon", "ma_weight", "volume_weight",
         "rsi_weight", "momentum_weight", "volume_spike_threshold",
@@ -944,6 +1004,10 @@ def export_suggestions_csv():
                 "Profile": profile.get("name", "Default"),
                 "Generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             })
+
+    # Mirror the trades export: plaintext message rather than a header-only file
+    if not rows:
+        return Response("No suggestions", mimetype="text/plain")
 
     fieldnames = ["Symbol", "Name", "Tier", "Signal", "Confidence",
                   "Price", "Reasoning", "Profile", "Generated"]
@@ -1231,6 +1295,20 @@ def restore():
         # Preferences
         for key, value in d.get("preferences", {}).items():
             set_pref(key, value)
+
+        db.session.flush()
+        # Enforce exactly one active profile after import: keep the most recent
+        # active one, deactivate the rest (handles backups with 0 or many active).
+        actives = AnalysisProfile.query.filter_by(is_active=True).order_by(
+            AnalysisProfile.created_at.desc()
+        ).all()
+        if actives:
+            for p in actives[1:]:
+                p.is_active = False
+        else:
+            first = AnalysisProfile.query.order_by(AnalysisProfile.created_at).first()
+            if first:
+                first.is_active = True
 
         db.session.commit()
         return jsonify({"ok": True})
