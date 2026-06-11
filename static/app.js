@@ -37,6 +37,29 @@ function esc(str) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// INLINE SVG ICON SET (Phase 1 — single 1.6px stroke, currentColor)
+// Replaces emoji used as UI iconography.
+// ════════════════════════════════════════════════════════════════
+const _ICON_PATHS = {
+  chart:    '<path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/>',
+  bell:     '<path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 004 0"/>',
+  gear:     '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  moon:     '<path d="M20 13A8 8 0 119 3a6 6 0 0011 10z"/>',
+  sun:      '<circle cx="12" cy="12" r="4"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3M4 4l2 2M18 18l2 2M20 4l-2 2M6 18l-2 2"/>',
+  calendar: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+  grid:     '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  refresh:  '<path d="M21 12a9 9 0 11-3-6.7L21 7"/><path d="M21 3v4h-4"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  bolt:     '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  search:   '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  note:     '<path d="M5 3h11l3 3v15H5z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+};
+function svgIcon(name, size = 15) {
+  const p = _ICON_PATHS[name] || '';
+  return `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+}
+
+// ════════════════════════════════════════════════════════════════
 // API CLIENT (BUG-010 — check response.ok before parsing JSON)
 // ════════════════════════════════════════════════════════════════
 async function _apiFetch(url, opts = {}) {
@@ -184,6 +207,7 @@ function showDashboard() {
   fetchAllQuotes();
   fetchMarketSummary();
   startAutoRefresh();
+  startStatusRail();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -520,11 +544,16 @@ async function loadMorningBriefing(force) {
 async function fetchAllQuotes() {
   if (S.watchlist.length === 0) { renderDashboard(); return; }
   try {
+    const prev = {};
+    Object.keys(S.quotes || {}).forEach(k => { if (S.quotes[k]) prev[k] = S.quotes[k].price; });
     const data = await api.post('/api/quote', { tickers: S.watchlist.map(t => t.symbol) });
     S.quotes = data;
+    S.lastQuoteRefresh = Date.now();
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     sendQuotesToTray(data);
     renderDashboard();
+    pulseChangedPrices(prev);
+    updateStatusRail();
     checkAlerts();
     updateMarketStatus();
     if (document.getElementById('tab-portfolio').classList.contains('active')) {
@@ -533,6 +562,23 @@ async function fetchAllQuotes() {
     // Fire extended details async — re-renders cards when done
     fetchTickerDetails();
   } catch (e) { showToast('Failed to fetch quotes. Is Flask running?', 'error'); }
+}
+
+// The single orchestrated motion: changed prices flash a 400ms background pulse
+// in their direction colour. Honors prefers-reduced-motion.
+function pulseChangedPrices(prev) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  Object.keys(S.quotes || {}).forEach(sym => {
+    const q = S.quotes[sym];
+    if (!q || prev[sym] == null || q.price == null || q.price === prev[sym]) return;
+    const cls = q.price > prev[sym] ? 'pulse-up' : 'pulse-down';
+    document.querySelectorAll(`[data-pulse="${sym}"]`).forEach(el => {
+      el.classList.remove('pulse-up', 'pulse-down');
+      void el.offsetWidth;                 // restart the animation
+      el.classList.add(cls);
+      setTimeout(() => el.classList.remove(cls), 450);
+    });
+  });
 }
 
 async function fetchTickerDetails() {
@@ -612,7 +658,7 @@ function renderCompact(el) {
       const d = ext.days_to_earn;
       const label = d === 0 ? 'Earnings today' : d === 1 ? 'Earnings tomorrow' : `Earnings in ${d}d`;
       const cls   = d <= 2 ? 'earn-red' : 'earn-yellow';
-      earnBadge   = `<span class="earn-badge ${cls}">📅 ${label}</span>`;
+      earnBadge   = `<span class="earn-badge ${cls}">${svgIcon('calendar', 11)} ${label}</span>`;
     }
 
     return `
@@ -620,7 +666,7 @@ function renderCompact(el) {
         <div class="card-accent-bar ${q.above_ma50 ? 'bullish' : 'bearish'}"></div>
         <button class="card-edit" onclick="openTickerDetail('${t.symbol}')">✎</button>
         <button class="card-remove" onclick="removeTicker('${t.symbol}')">✕</button>
-        <button class="card-chart-btn" onclick="openChart('${t.symbol}')">📈 CHART</button>
+        <button class="card-chart-btn" onclick="openChart('${t.symbol}')">${svgIcon('chart', 13)} Chart</button>
         <div class="card-top">
           <div>
             <div class="card-sym" style="cursor:pointer" onclick="openChart('${t.symbol}')" title="Open chart">${t.symbol}</div>
@@ -630,8 +676,8 @@ function renderCompact(el) {
             </div>
           </div>
           <div class="card-price-block">
-            <div class="card-price ${dir}">$${q.price.toFixed(2)}</div>
-            <div class="card-change ${dir}">${q.change >= 0 ? '+' : ''}$${q.change.toFixed(2)} (${q.pct_change >= 0 ? '+' : ''}${q.pct_change.toFixed(2)}%)</div>
+            <div class="card-price ${dir}" data-pulse="${t.symbol}">$${q.price.toFixed(2)}</div>
+            <div class="card-change ${dir}">${dirGlyph(q.change)}${q.change >= 0 ? '+' : ''}$${q.change.toFixed(2)} (${q.pct_change >= 0 ? '+' : ''}${q.pct_change.toFixed(2)}%)</div>
             ${extPriceHtml}
           </div>
         </div>
@@ -648,9 +694,9 @@ function renderCompact(el) {
             ${q.ma20 ? `<span class="signal-badge ${q.above_ma20 ? 'signal-bull' : 'signal-bear'}">${q.above_ma20 ? '▲' : '▼'} MA20</span>` : ''}
             ${q.ma50 ? `<span class="signal-badge ${q.above_ma50 ? 'signal-bull' : 'signal-bear'}">${q.above_ma50 ? '▲' : '▼'} MA50</span>` : ''}
             ${earnBadge}
-            ${t.notes ? `<span class="signal-badge signal-neutral" title="${esc(t.notes)}">📝</span>` : ''}
+            ${t.notes ? `<span class="signal-badge signal-neutral" title="${esc(t.notes)}">${svgIcon('note', 11)}</span>` : ''}
           </div>
-          ${sug ? `<span class="suggestion-badge ${sug.signal === 'BUY' ? 'sug-buy' : sug.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${sug.signal === 'BUY' ? '🟢' : sug.signal === 'SELL' ? '🔴' : '🟡'} ${sug.signal} ${sug.confidence}%</span>` : ''}
+          ${sug ? `<span class="suggestion-badge ${sug.signal === 'BUY' ? 'sug-buy' : sug.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${sigGlyph(sug.signal)} ${sug.signal} ${sug.confidence}%</span>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -670,7 +716,7 @@ function renderExpanded(el) {
     if (ext.short_interest != null) {
       const siPct = (ext.short_interest * 100).toFixed(1);
       if (ext.short_interest >= 0.30) {
-        siBadge = `<span class="si-badge si-squeeze" title="Short Interest: ${siPct}% of float">🔥 Squeeze Watch</span>`;
+        siBadge = `<span class="si-badge si-squeeze" title="Short Interest: ${siPct}% of float">Squeeze watch</span>`;
       } else if (ext.short_interest >= 0.15) {
         siBadge = `<span class="si-badge si-high" title="Short Interest: ${siPct}% of float">▲ High Short</span>`;
       } else {
@@ -684,7 +730,7 @@ function renderExpanded(el) {
       const d = ext.days_to_earn;
       const label = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : `${d}d`;
       const cls   = d <= 2 ? 'earn-red' : 'earn-yellow';
-      earnCell = `<span class="earn-badge ${cls}">📅 ${label}</span>`;
+      earnCell = `<span class="earn-badge ${cls}">${svgIcon('calendar', 11)} ${label}</span>`;
     }
 
     return `
@@ -799,7 +845,7 @@ function renderSignalsContent() {
             <div class="signal-name">${esc(s.name || '')} ${s.tier ? `<span class="tier-badge ${tierClass(s.tier)}">${esc(s.tier)}</span>` : ''}</div>
             ${regBadge}
           </div>
-          <span class="suggestion-badge ${sigClass}">${s.signal === 'BUY' ? '🟢' : s.signal === 'SELL' ? '🔴' : '🟡'} ${s.signal}</span>
+          <span class="suggestion-badge ${sigClass}">${sigGlyph(s.signal)} ${s.signal}</span>
           <div class="confidence-bar-wrap">
             <div class="confidence-label">Confidence: <span class="confidence-pct" style="color:${s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--yellow)'}">${s.confidence}%</span></div>
             <div class="confidence-bar"><div class="confidence-fill ${fillClass}" style="width:${s.confidence}%"></div></div>
@@ -813,7 +859,7 @@ function renderSignalsContent() {
           <div class="tier-info">Risk: ${esc(s.risk_tolerance || '—')}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="log-trade-btn" onclick="event.stopPropagation();openSignalDetail('${s.symbol}')">Why this score?</button>
-            <button class="log-trade-btn" onclick="event.stopPropagation();openChart('${s.symbol}')">📈 Chart</button>
+            <button class="log-trade-btn" onclick="event.stopPropagation();openChart('${s.symbol}')">${svgIcon('chart', 12)} Chart</button>
             <button class="log-trade-btn" onclick="event.stopPropagation();openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
               ${s.signal === 'BUY' ? '+ Log Buy' : s.signal === 'SELL' ? '+ Log Sell' : '+ Log Trade'}
             </button>
@@ -1109,18 +1155,19 @@ function renderBacktestResult(bt) {
   const strat = curve.map(p => +(p.strategy * 100).toFixed(2));
   const bh = curve.map(p => +(p.buy_hold * 100).toFixed(2));
   if (window.Plotly && curve.length) {
+    const c = chartColors();
     const traces = [
       { x: dates, y: strat, name: 'Strategy', type: 'scatter', mode: 'lines',
-        line: { color: '#e8a33d', width: 2 } },
+        line: { color: c.accent, width: 2 } },
       { x: dates, y: bh, name: 'Buy & hold', type: 'scatter', mode: 'lines',
-        line: { color: '#6b7280', width: 1.5, dash: 'dot' } },
+        line: { color: c.text, width: 1.5, dash: 'dot' } },
     ];
     const layout = {
       margin: { l: 44, r: 12, t: 10, b: 36 },
-      paper_bgcolor: '#0a0a0b', plot_bgcolor: '#111114',
-      font: { color: '#9898a8', size: 11, family: 'monospace' },
-      xaxis: { gridcolor: '#1e1e24', showgrid: true },
-      yaxis: { gridcolor: '#1e1e24', title: 'Equity (start = 100)', zeroline: false },
+      paper_bgcolor: c.surface, plot_bgcolor: c.plot,
+      font: { color: c.text, size: 11, family: 'JetBrains Mono, monospace' },
+      xaxis: { gridcolor: c.grid, showgrid: true },
+      yaxis: { gridcolor: c.grid, title: 'Equity (start = 100)', zeroline: false },
       legend: { orientation: 'h', x: 0, y: 1.12 },
       showlegend: true, height: 300,
     };
@@ -1965,7 +2012,7 @@ function _renderQuizResults() {
             <div class="result-card-header">
               <span class="result-match-pct" style="color:${pctColor}">${r.matchPct}% match</span>
               <span class="pic-type-badge" style="background:${typeColor}22;color:${typeColor};border-color:${typeColor}55">${esc(preset?.type || '')}</span>
-              <span class="pic-meta">⚙ ${esc(preset?.complexity || '')}</span>
+              <span class="pic-meta">${esc(preset?.complexity || '')}</span>
             </div>
             <div class="result-name">${esc(r.name)}</div>
             <p class="result-desc">${esc(preset?.description || '')}</p>
@@ -2078,7 +2125,7 @@ function _renderPresetInfoCard(preset, cardId) {
   el.innerHTML = `
     <div class="pic-header">
       <span class="pic-type-badge" style="background:${color}22;color:${color};border-color:${color}55">${esc(preset.type)}</span>
-      <span class="pic-meta">⚙ ${esc(preset.complexity)}</span>
+      <span class="pic-meta">${esc(preset.complexity)}</span>
       <span class="pic-meta">↗ ${esc(preset.expected_return)}</span>
     </div>
     <p class="pic-desc">${esc(preset.description)}</p>
@@ -2234,7 +2281,7 @@ function checkAlerts() {
     if (triggered && !S.triggeredAlerts.has(item.symbol)) {
       S.triggeredAlerts.add(item.symbol);
       if (S.notifGranted) new Notification(`${item.symbol} Alert`, { body: `${item.symbol} is ${item.alert_direction} $${item.alert_price} — now $${q.price.toFixed(2)}` });
-      showToast(`🔔 ${item.symbol} crossed $${item.alert_price} → $${q.price.toFixed(2)}`, 'success');
+      showToast(`${item.symbol} crossed $${item.alert_price} → $${q.price.toFixed(2)}`, 'success');
     } else if (!triggered) {
       S.triggeredAlerts.delete(item.symbol);
     }
@@ -2273,6 +2320,67 @@ function updateMarketStatus() {
   el.textContent = open ? '● MARKET OPEN' : '○ MARKET CLOSED';
   el.className = 'market-status ' + (open ? 'market-open' : 'market-closed');
 }
+
+// ── Status rail (signature element): session · NY clock · indices · refresh · profile ──
+let _statusRailTimer = null;
+function startStatusRail() {
+  if (_statusRailTimer) return;
+  updateStatusRail();
+  _statusRailTimer = setInterval(updateStatusRail, 1000);
+}
+
+function _marketSession() {
+  if (isMarketOpen())  return { cls: 'open',   label: 'Market open' };
+  if (isPreMarket())   return { cls: 'pre',    label: 'Pre-market' };
+  if (isAfterHours())  return { cls: 'after',  label: 'After hours' };
+  return { cls: 'closed', label: 'Market closed' };
+}
+
+function updateStatusRail() {
+  const rail = document.getElementById('status-rail');
+  if (!rail) return;
+
+  // Session + dot
+  const sess = _marketSession();
+  const sEl = document.getElementById('rail-session');
+  if (sEl) { sEl.className = 'rail-session ' + sess.cls; document.getElementById('rail-session-text').textContent = sess.label; }
+
+  // NY clock
+  const clock = document.getElementById('rail-clock');
+  if (clock) clock.textContent = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false }) + ' ET';
+
+  // Three indices (from the market-summary cache)
+  const idxEl = document.getElementById('rail-indices');
+  if (idxEl) {
+    const indices = (marketSummaryCache && marketSummaryCache.indices) || {};
+    const order = [['^GSPC', 'S&P'], ['^IXIC', 'NAS'], ['^DJI', 'DOW']];
+    const html = order.filter(([s]) => indices[s]).map(([s, nm]) => {
+      const idx = indices[s], up = idx.pct >= 0;
+      return `<span class="rail-index"><span class="rail-index-name">${nm}</span><span class="${up ? 'up' : 'down'}">${dirGlyph(idx.pct)}${Math.abs(idx.pct).toFixed(2)}%</span></span>`;
+    }).join('');
+    idxEl.innerHTML = html;
+  }
+
+  // Last refresh age
+  const refresh = document.getElementById('rail-refresh');
+  if (refresh) {
+    if (S.lastQuoteRefresh) {
+      const age = Math.round((Date.now() - S.lastQuoteRefresh) / 1000);
+      const txt = age < 60 ? `${age}s ago` : `${Math.floor(age / 60)}m ago`;
+      refresh.textContent = `Updated ${txt}`;
+      refresh.classList.toggle('stale', age > parseInt(S.preferences.interval || 300) + 30);
+    } else refresh.textContent = 'Updating…';
+  }
+
+  // Active profile
+  const prof = document.getElementById('rail-profile');
+  if (prof) prof.textContent = (S.activeProfile && S.activeProfile.name) ? S.activeProfile.name : 'No profile';
+}
+
+// Leading direction glyph (▲/▼) — direction is never encoded by colour alone
+function dirGlyph(v) { return v > 0 ? '▲ ' : v < 0 ? '▼ ' : '· '; }
+// Signal glyph for BUY/SELL/HOLD badges (shape + colour, never colour alone)
+function sigGlyph(sig) { return sig === 'BUY' ? '▲' : sig === 'SELL' ? '▼' : '■'; }
 
 // ════════════════════════════════════════════════════════════════
 // BACKUP / RESTORE
@@ -2403,7 +2511,7 @@ try {
   if (topSignal) {
     const sigRow = widget.addStack();
     sigRow.layoutHorizontally();
-    const sigIcon = topSignal.signal === "BUY" ? "🟢" : "🔴";
+    const sigIcon = topSignal.signal === "BUY" ? "▲" : topSignal.signal === "SELL" ? "▼" : "■";
     const sigText = sigRow.addText(sigIcon + " " + topSignal.symbol + " " + topSignal.signal + " " + topSignal.confidence + "%");
     sigText.textColor = topSignal.signal === "BUY" ? new Color("#00e676") : new Color("#ff5252");
     sigText.font = Font.mediumMonospacedSystemFont(9);
@@ -2650,10 +2758,11 @@ function renderPlotlyChart(data) {
     ay: a.type === 'golden_cross' ? -36 : 36,
   }));
 
+  const c = chartColors();
   const layout = {
-    paper_bgcolor: '#0a0a0b',
-    plot_bgcolor:  '#111114',
-    font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
+    paper_bgcolor: c.surface,
+    plot_bgcolor:  c.plot,
+    font: { family: 'JetBrains Mono, monospace', color: c.text, size: 10 },
     margin: { l: 10, r: 70, t: 8, b: 30 },
     dragmode: 'zoom',
     xaxis: {
@@ -2669,53 +2778,53 @@ function renderPlotlyChart(data) {
           { count: 1,  label: '1Y', step: 'year',  stepmode: 'backward' },
           { step: 'all', label: 'All' },
         ],
-        bgcolor:      '#18181d',
-        activecolor:  '#00d4aa',
-        bordercolor:  '#2a2a35',
+        bgcolor:      c.surface,
+        activecolor:  c.accent,
+        bordercolor:  c.grid,
         borderwidth:  1,
-        font: { family: 'JetBrains Mono, monospace', color: '#9898a8', size: 10 },
+        font: { family: 'JetBrains Mono, monospace', color: c.text, size: 10 },
         x: 0, xanchor: 'left', y: 1.04,
       },
-      gridcolor: '#1e1e26',
-      color: '#5a5a6e',
+      gridcolor: c.grid,
+      color: c.text,
       showgrid: true,
     },
     yaxis: {
       domain: hasMa200 ? [0.38, 1.0] : [0.22, 1.0],
-      gridcolor: '#1e1e26',
-      color: '#5a5a6e',
+      gridcolor: c.grid,
+      color: c.text,
       side: 'right',
       tickprefix: '$',
       showgrid: true,
     },
     yaxis2: {
       domain: hasMa200 ? [0.20, 0.35] : [0, 0.17],
-      gridcolor: '#1e1e26',
-      color: '#5a5a6e',
+      gridcolor: c.grid,
+      color: c.text,
       side: 'right',
       showgrid: false,
     },
     yaxis3: {
       domain: [0, 0.17],
-      gridcolor: '#1e1e26',
-      color: '#5a5a6e',
+      gridcolor: c.grid,
+      color: c.text,
       side: 'right',
       zeroline: true,
-      zerolinecolor: '#363645',
+      zerolinecolor: c.grid,
       zerolinewidth: 1,
       showgrid: false,
-      title: { text: 'OSC', font: { size: 9, color: '#5a5a6e' } },
+      title: { text: 'OSC', font: { size: 9, color: c.text } },
     },
     legend: {
       x: 0.01, y: 0.97,
-      bgcolor: 'rgba(10,10,11,0.75)',
-      bordercolor: '#2a2a35',
+      bgcolor: c.surface,
+      bordercolor: c.grid,
       borderwidth: 1,
       font: { size: 10 },
     },
     annotations: plotAnnotations,
     hovermode: 'x unified',
-    hoverlabel: { bgcolor: '#18181d', bordercolor: '#363645',
+    hoverlabel: { bgcolor: c.surface, bordercolor: c.grid,
                   font: { family: 'JetBrains Mono, monospace', size: 11 } },
     selectdirection: 'h',
   };
@@ -2848,7 +2957,7 @@ function initElectronControls() {
       <div style="display:flex;gap:6px;align-items:center">
         <button class="btn-sm" onclick="electronCompact()" title="Compact sidebar mode">⊟ COMPACT</button>
         <button class="btn-sm" onclick="electronFull()" title="Full dashboard mode">⊞ FULL</button>
-        <button class="btn-sm" id="aot-btn" onclick="electronToggleAOT()" title="Always on top">📌 AOT</button>
+        <button class="btn-sm" id="aot-btn" onclick="electronToggleAOT()" title="Always on top">Always on top</button>
       </div>`;
   }
 }
@@ -2889,7 +2998,31 @@ function toggleTheme() {
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   const btn = document.getElementById('theme-toggle-btn');
-  if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
+  if (btn) {
+    btn.innerHTML = theme === 'dark' ? svgIcon('moon', 15) : svgIcon('sun', 15);
+    btn.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  }
+  rethemeCharts();
+}
+
+// Read chart colors from the live CSS custom properties so Plotly matches the
+// active theme (fixes black-chart-on-light-theme) and re-renders on toggle.
+function chartColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = n => cs.getPropertyValue(n).trim();
+  return { surface: v('--bg2'), plot: v('--bg'), text: v('--text2'),
+           grid: v('--border'), accent: v('--accent'), green: v('--green'), red: v('--red') };
+}
+
+function rethemeCharts() {
+  // Re-render whichever Plotly surfaces are currently visible
+  try {
+    if (document.getElementById('tab-heatmap')?.classList.contains('active')) renderHeatmapTab(true);
+    if (document.getElementById('chart-modal')?.classList.contains('open') && typeof currentChartSymbol !== 'undefined' && currentChartSymbol) {
+      openChart(currentChartSymbol);
+    }
+    if (S.lastBacktest && document.getElementById('bt-equity-chart')) renderBacktestResult(S.lastBacktest);
+  } catch (e) { /* non-fatal */ }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2957,9 +3090,10 @@ async function renderHeatmapTab(force = false) {
       textfont: { family: 'JetBrains Mono, monospace', size: 11, color: '#e2e2e8' },
     };
 
+    const _hc = chartColors();
     const layout = {
-      paper_bgcolor: '#0a0a0b',
-      font: { family: 'JetBrains Mono, monospace', color: '#e2e2e8', size: 11 },
+      paper_bgcolor: _hc.surface,
+      font: { family: 'JetBrains Mono, monospace', color: _hc.text, size: 11 },
       margin: { l: 0, r: 0, t: 4, b: 0 },
     };
 
@@ -4232,7 +4366,7 @@ function _optSigRenderCards(results) {
   const wrap = document.getElementById('optsig-cards');
   if (!results || !results.length) {
     wrap.innerHTML = `<div class="no-profile-msg">
-      No recommendations found. Try adjusting parameters or adding more tickers in the ⚙ panel above.
+      No recommendations found. Try adjusting parameters or adding more tickers in the settings panel above.
     </div>`;
     return;
   }
@@ -4319,7 +4453,7 @@ function _optSigBuildCard(r, stratColor) {
   const planHtml = pep ? `
     <div class="optsig-plan">
       <div class="optsig-plan-header">
-        <span class="optsig-plan-title">📋 Plain English Plan</span>
+        <span class="optsig-plan-title">Plain English plan</span>
       </div>
       <div class="optsig-plan-body">
         <div class="optsig-plan-summary">${esc(pep.summary)}</div>

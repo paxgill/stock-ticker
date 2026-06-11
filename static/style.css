@@ -1,28 +1,62 @@
-/* ─── Reset & Base ─────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN SYSTEM — "Print meets phosphor"
+   A personal trading desk: Financial Times newsprint × vintage Quotron terminal.
+   The one idea: numbers are the interface; everything else recedes.
+
+   PALETTE
+   - Dark surfaces are deep ink-navy (#101319), not pure black — calmer, less
+     "default AI dark app". Light surfaces are warm newsprint (#F7F5F0).
+   - ACCENT is amber #E8A33D (phosphor-terminal heritage): focus, active states,
+     masthead, interactive affordances. The old teal is fully retired.
+   - SEMANTIC green #2FBF71 / red #E5484D are reserved EXCLUSIVELY for price
+     direction and P&L. Nothing decorative is green or red. Destructive UI uses a
+     separate clay --danger so the price-red keeps its single meaning.
+   - Direction is always glyph (▲/▼) + colour, never colour alone.
+
+   TYPE — three faces, three jobs, no overlap:
+   - --font-display 'Space Grotesk': masthead + tab labels only. A squarish
+     grotesque reads as instrument-panel signage without the cliché of a serif,
+     and its even rhythm sits well next to tabular numerals.
+   - --font 'Inter': all body / UI prose. Quiet, humanist, high legibility.
+   - --font-mono 'JetBrains Mono': DATA only — prices, percentages, volumes,
+     tables, clocks. Never prose. Tabular figures keep columns from jittering.
+
+   Both themes are fully designed and meet WCAG AA on text. Density is tight on
+   data surfaces; the bottom status rail is the single signature flourish.
+   ═══════════════════════════════════════════════════════════════════════════ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #0a0a0b;
-  --bg2:       #111114;
-  --bg3:       #18181d;
-  --bg4:       #1e1e26;
-  --border:    #2a2a35;
-  --border2:   #363645;
-  --text:      #e2e2e8;
-  --text2:     #9898a8;
-  --text3:     #5a5a6e;
-  --accent:    #00d4aa;
-  --accent2:   #0099ff;
-  --green:     #00e676;
-  --green2:    #0d2a1a;
-  --red:       #ff5252;
-  --red2:      #2a0d0d;
-  --yellow:    #ffd740;
-  --yellow2:   #2a2200;
-  --font:      'JetBrains Mono', 'Courier New', monospace;
+  /* Dark — deep ink-navy */
+  --bg:        #101319;
+  --bg2:       #161B23;   /* surface */
+  --bg3:       #1B212B;
+  --bg4:       #232B38;
+  --border:    #262D38;   /* hairline */
+  --border2:   #333C4A;
+  --text:      #E6E8EC;
+  --text2:     #9AA3B0;
+  --text3:     #5E6675;
+  --accent:    #E8A33D;   /* amber */
+  --accent2:   #C8862A;
+  --accent-ink:#1A1205;   /* text on amber fills */
+  --green:     #2FBF71;   /* price up / P&L only */
+  --green2:    #12271C;
+  --red:       #E5484D;   /* price down / P&L only */
+  --red2:      #2A1517;
+  --yellow:    #E8A33D;   /* caution folds into amber */
+  --yellow2:   #2A2012;
+  --danger:    #C2553F;   /* destructive UI (not P&L) */
+  --font:        'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:   'JetBrains Mono', ui-monospace, 'Courier New', monospace;
+  --font-display:'Space Grotesk', var(--font);
 }
 
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+/* Data values use the mono face with tabular figures so columns never jitter */
+.mono, .signal-price, .ms-index-pct, .ms-index-price, .stat-big, .stat-sub,
+.confidence-pct, .countdown, .bt-stat-val, .sd-fam-val, .signal-sym,
+.journal-table td, .bt-table td, .bt-meta, .ms-index-name { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* ─── Screens ──────────────────────────────────────────────────── */
 .screen { display: none; }
@@ -30,12 +64,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 #dashboard.active { display: flex; flex-direction: column; min-height: 100vh; }
 
 /* ─── ONBOARDING ───────────────────────────────────────────────── */
-#onboarding { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: radial-gradient(ellipse at 20% 50%, rgba(0,212,170,.06) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(0,153,255,.05) 0%, transparent 60%), var(--bg); }
+#onboarding { min-height: 100vh; display: none; align-items: center; justify-content: center; padding: 24px; background: radial-gradient(ellipse at 20% 50%, rgba(232,163,61,.06) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(232,163,61,.04) 0%, transparent 60%), var(--bg); }
 #onboarding.active { display: flex; }
 
 .ob-container { width: 100%; max-width: 680px; }
 .ob-header { margin-bottom: 40px; }
-.ob-logo { font-size: 22px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; }
+.ob-logo { font-family: var(--font-display); font-size: 23px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; }
 .ob-tagline { color: var(--text3); font-size: 12px; margin-top: 4px; }
 
 .step-indicator { display: flex; align-items: center; margin-bottom: 36px; }
@@ -178,15 +212,17 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 /* ─── DASHBOARD LAYOUT ─────────────────────────────────────────── */
 .dash-header { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: var(--bg2); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; flex-wrap: wrap; }
-.dash-logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: 0.1em; margin-right: 4px; flex-shrink: 0; }
+.dash-logo { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: 0.02em; margin-right: 4px; flex-shrink: 0; }
 .tab-nav { display: flex; gap: 0; flex: 1; }
-.tab-btn { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text3); font-family: var(--font); font-size: 11px; letter-spacing: 0.1em; padding: 6px 14px; cursor: pointer; transition: all .15s; }
+.tab-btn { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text3); font-family: var(--font-display); font-weight: 500; font-size: 12px; letter-spacing: 0.02em; padding: 6px 14px; cursor: pointer; transition: all .15s; }
+.tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tab-btn:hover { color: var(--text2); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 .dash-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .market-status { font-size: 10px; letter-spacing: 0.08em; padding: 3px 8px; border-radius: 3px; white-space: nowrap; }
-.market-open { background: rgba(0,230,118,.12); color: var(--green); border: 1px solid rgba(0,230,118,.25); }
-.market-closed { background: rgba(255,82,82,.08); color: var(--red); border: 1px solid rgba(255,82,82,.18); }
+/* Session state uses amber/neutral — green & red are reserved for price & P&L */
+.market-open { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.market-closed { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
 .last-updated { color: var(--text3); font-size: 10px; white-space: nowrap; }
 
 .dash-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 7px 20px; background: var(--bg); border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
@@ -1420,24 +1456,26 @@ kbd { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3
 
 /* ─── Light Theme ──────────────────────────────────────────────── */
 html[data-theme="light"] {
-  --bg:      #f5f5f7;
-  --bg2:     #ffffff;
-  --bg3:     #f0f0f2;
-  --bg4:     #e4e4ea;
-  --border:  #d6d6de;
-  --border2: #bdbdc8;
-  --text:    #1c1c1e;
-  --text2:   #48484f;
-  --text3:   #8a8a96;
-  --accent:  #00a885;
-  --accent2: #0077cc;
-  --green:   #28a745;
-  --green2:  #e6f4ea;
-  --red:     #dc3545;
-  --red2:    #fdecea;
-  --yellow:  #b88a00;
-  --yellow2: #fff8e1;
-  --font:    'JetBrains Mono', 'Courier New', monospace;
+  /* Light — warm newsprint */
+  --bg:        #F7F5F0;   /* paper */
+  --bg2:       #FFFFFF;   /* surface */
+  --bg3:       #F1EEE7;
+  --bg4:       #E8E3D9;
+  --border:    #DEDAD0;   /* hairline */
+  --border2:   #CFC9BC;
+  --text:      #1A1C20;   /* ink */
+  --text2:     #4C4F57;
+  --text3:     #847F73;
+  --accent:    #B5781C;   /* amber, darkened for AA on paper */
+  --accent2:   #946115;
+  --accent-ink:#FFFFFF;
+  --green:     #1E9D57;
+  --green2:    #E4F1E8;
+  --red:       #C4373C;
+  --red2:      #F6E7E7;
+  --yellow:    #B5781C;
+  --yellow2:   #F4ECDC;
+  --danger:    #B14A35;
 }
 
 /* Plotly overrides for light theme */
@@ -2378,3 +2416,78 @@ details[open] .optsig-params-summary::after { content: '▾'; }
 
 .journal-ai-review { margin: 10px 0; }
 .bt-ai-actions { margin: 4px 0 12px; }
+
+/* ═══════════════════════ Phase 1: status rail (signature element) ═════════════ */
+#dashboard.active { padding-bottom: 28px; }   /* reserve space for the fixed rail */
+.status-rail {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 28px; z-index: 500;
+  display: flex; align-items: center; gap: 16px; padding: 0 14px;
+  background: var(--bg2); border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 11px; color: var(--text2);
+  white-space: nowrap; overflow: hidden;
+}
+.rail-session { display: flex; align-items: center; gap: 6px; flex-shrink: 0; font-weight: 600; letter-spacing: 0.02em; }
+.rail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); flex-shrink: 0; }
+/* Session state uses amber (the "active" accent), not green/red — those are
+   reserved for price/P&L only. */
+.rail-session.open    .rail-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.rail-session.pre     .rail-dot,
+.rail-session.after   .rail-dot { background: var(--accent); opacity: .7; }
+.rail-session.closed  .rail-dot { background: var(--text3); }
+.rail-clock { flex-shrink: 0; color: var(--text3); }
+.rail-indices { display: flex; gap: 14px; overflow: hidden; min-width: 0; }
+.rail-index { display: inline-flex; align-items: center; gap: 5px; }
+.rail-index-name { color: var(--text3); }
+.rail-spacer { flex: 1 1 auto; min-width: 8px; }
+.rail-meta { flex-shrink: 0; color: var(--text3); }
+.rail-meta.stale { color: var(--accent); }
+/* Tape-scroll when the indices block overflows on narrow screens */
+@keyframes rail-tape { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.rail-indices.tape { animation: rail-tape 18s linear infinite; }
+
+/* ═══════════════════════ Phase 1: icons, motion, focus, density ═══════════════ */
+.ico { display: inline-block; vertical-align: -2px; flex-shrink: 0; }
+.btn-icon, .btn-sm, .card-chart-btn, .log-trade-btn { display: inline-flex; align-items: center; gap: 5px; }
+.btn-icon.icon-only { padding: 6px 8px; }
+
+/* btn-primary text colour sits on the amber accent */
+.btn-primary { color: var(--accent-ink) !important; }
+.btn-danger  { background: var(--danger) !important; border-color: var(--danger) !important; color: #fff !important; }
+.btn-danger:hover { filter: brightness(1.08); }
+
+/* The single orchestrated motion: a 400ms directional background pulse */
+@keyframes pulse-up   { 0% { background: color-mix(in srgb, var(--green) 38%, transparent); } 100% { background: transparent; } }
+@keyframes pulse-down { 0% { background: color-mix(in srgb, var(--red) 38%, transparent); }   100% { background: transparent; } }
+.pulse-up   { animation: pulse-up   .42s ease-out; border-radius: 3px; }
+.pulse-down { animation: pulse-down .42s ease-out; border-radius: 3px; }
+
+/* Visible keyboard focus everywhere */
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+/* Skeleton loaders — shaped like the rows they precede */
+@keyframes sk-shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+.skeleton-row { height: 64px; border-radius: 6px; margin-bottom: 10px; border: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--bg2) 0px, var(--bg3) 80px, var(--bg2) 160px);
+  background-size: 400px 100%; animation: sk-shimmer 1.2s linear infinite; }
+.skeleton-wrap { padding: 4px 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-up, .pulse-down, .rail-indices.tape, .skeleton-row { animation: none !important; }
+}
+
+/* ── Responsive: tabs become a bottom bar, cards stack, at ≤520px ── */
+@media (max-width: 520px) {
+  .tab-nav {
+    position: fixed; left: 0; right: 0; bottom: 28px; z-index: 480;
+    display: flex; overflow-x: auto; background: var(--bg2);
+    border-top: 1px solid var(--border); padding: 2px 4px; gap: 0;
+  }
+  .tab-btn { flex: 0 0 auto; padding: 8px 12px; font-size: 11px; }
+  #dashboard.active { padding-bottom: 76px; }   /* room for tab bar + rail */
+  .dash-header { flex-wrap: wrap; }
+  .status-rail { gap: 10px; font-size: 10px; }
+  .rail-clock, .rail-meta:nth-child(6) { display: none; }   /* hide clock + profile on tiny screens */
+}

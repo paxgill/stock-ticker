@@ -6,7 +6,7 @@
 <title>PG Stock Analysis</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -87,7 +87,7 @@
         </div>
         <div id="ob-preset-info" class="preset-info-card" style="display:none"></div>
         <div id="ob-preset-customize" class="preset-customize-bar" style="display:none">
-          <span class="preset-lock-msg">⚿ Sliders locked to preset</span>
+          <span class="preset-lock-msg">Sliders locked to preset</span>
           <button class="btn-sm" onclick="customizePreset('ob')">Customize ✎</button>
         </div>
         <div class="quiz-launcher-row">
@@ -239,15 +239,15 @@
       <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
       <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
       <button class="tab-btn" data-tab="backtest" onclick="switchTab('backtest',this)">BACKTEST</button>
-      <button class="tab-btn" data-tab="optsig" onclick="switchTab('optsig',this)">⚡ OPT SIGNALS</button>
+      <button class="tab-btn" data-tab="optsig" onclick="switchTab('optsig',this)">OPT SIGNALS</button>
     </nav>
     <div class="dash-right">
       <span id="market-status" class="market-status"></span>
       <span id="last-updated" class="last-updated">—</span>
-      <button class="btn-icon" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
-      <button class="btn-icon" onclick="openWidget()">⊞ WIDGET</button>
-      <button class="btn-icon" id="notif-btn" onclick="requestNotifications()">🔔</button>
-      <button class="btn-icon" onclick="openSettings()">⚙</button>
+      <button class="btn-icon icon-only" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
+      <button class="btn-icon" onclick="openWidget()" aria-label="Widget script"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> Widget</button>
+      <button class="btn-icon icon-only" id="notif-btn" onclick="requestNotifications()" title="Notifications" aria-label="Notifications"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 004 0"/></svg></button>
+      <button class="btn-icon icon-only" onclick="openSettings()" title="Settings" aria-label="Settings"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></button>
     </div>
   </header>
 
@@ -348,7 +348,7 @@
     <!-- Landing / quiz state -->
     <div id="optsig-landing" class="optsig-landing">
       <div class="optsig-landing-inner">
-        <div class="optsig-hero-icon">⚡</div>
+        <div class="optsig-hero-icon">◆</div>
         <h2 class="optsig-hero-title">Options Signal Engine</h2>
         <p class="optsig-hero-sub">
           Answer 7 quick questions and get live options trade recommendations
@@ -378,7 +378,7 @@
 
       <!-- Params panel -->
       <details class="optsig-params-panel" id="optsig-params-panel">
-        <summary class="optsig-params-summary">⚙ Customize Parameters</summary>
+        <summary class="optsig-params-summary">Customize parameters</summary>
         <div class="optsig-params-body">
           <div class="optsig-param-grid">
             <div class="optsig-param-group">
@@ -531,6 +531,16 @@
       <div class="empty-state"><h3>No backtest yet</h3><p>Pick a symbol and profile, then run a walk-forward simulation (capped at 1 symbol × 3 years).</p></div>
     </div>
   </div>
+
+  <!-- Status rail (signature element) -->
+  <div id="status-rail" class="status-rail">
+    <div class="rail-session" id="rail-session"><span class="rail-dot"></span><span id="rail-session-text">—</span></div>
+    <div class="rail-clock" id="rail-clock">--:--:-- ET</div>
+    <div class="rail-indices" id="rail-indices"></div>
+    <div class="rail-spacer"></div>
+    <div class="rail-meta" id="rail-refresh">—</div>
+    <div class="rail-meta" id="rail-profile">—</div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════ MODALS -->
@@ -569,7 +579,7 @@
 <div id="settings-modal" class="modal-overlay" onclick="closeModalOverlay(event,'settings-modal')">
   <div class="modal-box modal-box-med">
     <div class="modal-header">
-      <div class="modal-title">⚙ SETTINGS</div>
+      <div class="modal-title">SETTINGS</div>
       <button class="modal-close" onclick="closeModal('settings-modal')">✕</button>
     </div>
     <div class="modal-tabs">
@@ -651,7 +661,7 @@
         </select>
         <div id="pe-preset-info" class="preset-info-card" style="display:none;margin-top:8px"></div>
         <div id="pe-preset-customize" class="preset-customize-bar" style="display:none">
-          <span class="preset-lock-msg">⚿ Sliders locked to preset</span>
+          <span class="preset-lock-msg">Sliders locked to preset</span>
           <button class="btn-sm" onclick="customizePreset('pe')">Customize ✎</button>
         </div>
       </div>
@@ -854,8 +864,8 @@
 
     <!-- Tab navigation -->
     <div class="chart-tab-nav">
-      <button class="chart-tab-btn active" id="chart-tab-btn-chart" onclick="switchChartTab('chart')">📈 CHART</button>
-      <button class="chart-tab-btn" id="chart-tab-btn-options" onclick="switchChartTab('options')">📊 OPTIONS</button>
+      <button class="chart-tab-btn active" id="chart-tab-btn-chart" onclick="switchChartTab('chart')">CHART</button>
+      <button class="chart-tab-btn" id="chart-tab-btn-options" onclick="switchChartTab('options')">OPTIONS</button>
     </div>
 
     <!-- ── CHART TAB ─────────────────────────────────────────────── -->
@@ -875,9 +885,9 @@
 
       <!-- Options subtab navigation -->
       <div class="opt-subtab-nav">
-        <button class="opt-subtab-btn active" id="opt-subtab-btn-chain"      onclick="switchOptSubtab('chain')">📋 CHAIN</button>
-        <button class="opt-subtab-btn"        id="opt-subtab-btn-strategies" onclick="switchOptSubtab('strategies')">🎯 STRATEGIES</button>
-        <button class="opt-subtab-btn"        id="opt-subtab-btn-quiz"       onclick="switchOptSubtab('quiz')">❓ QUESTIONNAIRE</button>
+        <button class="opt-subtab-btn active" id="opt-subtab-btn-chain"      onclick="switchOptSubtab('chain')">CHAIN</button>
+        <button class="opt-subtab-btn"        id="opt-subtab-btn-strategies" onclick="switchOptSubtab('strategies')">STRATEGIES</button>
+        <button class="opt-subtab-btn"        id="opt-subtab-btn-quiz"       onclick="switchOptSubtab('quiz')">QUESTIONNAIRE</button>
       </div>
 
       <!-- ── CHAIN subtab ──────────────────────────────────────── -->
@@ -939,7 +949,7 @@
   <div class="modal-box modal-box-med">
     <div class="modal-header">
       <div>
-        <div class="modal-title">⚡ FIND YOUR OPTIONS STRATEGY</div>
+        <div class="modal-title">FIND YOUR OPTIONS STRATEGY</div>
         <div style="font-size:11px;color:var(--text3);margin-top:2px">7 quick questions — no finance jargon required.</div>
       </div>
       <button class="modal-close" onclick="closeModal('optsig-quiz-modal')">✕</button>
