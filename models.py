@@ -44,6 +44,7 @@ class AnalysisProfile(db.Model):
     momentum_days = db.Column(db.Integer, default=10)
     max_trades_per_day = db.Column(db.Integer, default=3)
     is_active = db.Column(db.Boolean, default=False)
+    preset_key = db.Column(db.String(40))  # set when created from a research preset
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -63,6 +64,7 @@ class AnalysisProfile(db.Model):
             "momentum_days": self.momentum_days,
             "max_trades_per_day": self.max_trades_per_day,
             "is_active": self.is_active,
+            "preset_key": self.preset_key,
             "created_at": self.created_at.isoformat(),
         }
 

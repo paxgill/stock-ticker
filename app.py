@@ -14,8 +14,10 @@ import pandas as pd
 from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference, FMPCache
 from analysis import (
     analyze_ticker, compute_rsi, compute_rvol, rvol_tier,
-    smooth_prices, detect_surge_crash, DEFAULT_PROFILE,
+    smooth_prices, detect_surge_crash, detect_regime,
+    PRESETS, preset_to_profile, DISCLAIMER, DEFAULT_PROFILE,
 )
+from backtest import run_backtest
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
@@ -54,7 +56,8 @@ def _existing_columns(table_name: str) -> set:
 # the column is genuinely missing — which is effectively "ADD COLUMN IF NOT
 # EXISTS" on every dialect.
 SCHEMA_MIGRATIONS = [
-    # Populated by later phases, e.g. ("watchlist", "tags", "VARCHAR(255)").
+    # Phase 2: profiles created from a research preset remember which one.
+    ("analysis_profiles", "preset_key", "VARCHAR(40)"),
 ]
 
 
@@ -822,6 +825,49 @@ def activate_profile(pid):
     profile.is_active = True
     db.session.commit()
     return jsonify(profile.to_dict())
+
+
+# ─── Research-grounded Presets (Phase 2d) ─────────────────────────────────────
+@app.route("/api/presets")
+def get_presets():
+    """List the research-grounded strategy presets with their methodology notes."""
+    return jsonify([
+        {
+            "key": p["key"], "name": p["name"], "research": p["research"],
+            "believes": p["believes"], "risk_tolerance": p["risk_tolerance"],
+            "horizon": p["horizon"],
+            "weights": {
+                "trend": p["ma_weight"], "momentum": p["momentum_weight"],
+                "volume_flow": p["volume_weight"], "oscillator": p["rsi_weight"],
+            },
+            "requires_fundamentals": p.get("requires_fundamentals", False),
+        }
+        for p in PRESETS.values()
+    ])
+
+
+@app.route("/api/profiles/from-preset/<key>", methods=["POST"])
+def create_profile_from_preset(key):
+    """Create (and optionally activate) an analysis profile from a preset."""
+    prof = preset_to_profile(key, (request.json or {}).get("name"))
+    if not prof:
+        return jsonify({"error": f"Unknown preset '{key}'"}), 404
+
+    activate = bool((request.json or {}).get("is_active", True))
+    profile = AnalysisProfile(
+        name=prof["name"], risk_tolerance=prof["risk_tolerance"], horizon=prof["horizon"],
+        ma_weight=prof["ma_weight"], volume_weight=prof["volume_weight"],
+        rsi_weight=prof["rsi_weight"], momentum_weight=prof["momentum_weight"],
+        volume_spike_threshold=prof["volume_spike_threshold"],
+        rsi_overbought=prof["rsi_overbought"], rsi_oversold=prof["rsi_oversold"],
+        momentum_days=prof["momentum_days"], max_trades_per_day=prof["max_trades_per_day"],
+        preset_key=key, is_active=activate,
+    )
+    if activate:
+        AnalysisProfile.query.update({"is_active": False})
+    db.session.add(profile)
+    db.session.commit()
+    return jsonify(profile.to_dict()), 201
 
 
 # ─── Chart Data ──────────────────────────────────────────────────────────────
@@ -1834,6 +1880,56 @@ def surge_crash(ticker):
             "period":  period,
             "results": results,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── Walk-forward Backtest (Phase 2e) ─────────────────────────────────────────
+@app.route("/api/backtest", methods=["POST"])
+def backtest():
+    """
+    Replay the signal engine over history for one symbol.
+
+    Body: {symbol, profile_id?|preset_key?, start?, end?, cost_bps?}
+    Capped at 1 symbol × 3 years to stay polite to yfinance. Results are
+    hypothetical and never persisted.
+    """
+    d = request.json or {}
+    symbol = str(d.get("symbol", "")).upper().strip()
+    if not symbol:
+        return jsonify({"error": "A symbol is required."}), 400
+
+    # Resolve the profile: explicit id, preset, or the active profile.
+    profile = None
+    if d.get("preset_key"):
+        profile = preset_to_profile(d["preset_key"])
+        if not profile:
+            return jsonify({"error": f"Unknown preset '{d['preset_key']}'"}), 400
+    elif d.get("profile_id"):
+        p = AnalysisProfile.query.get(d["profile_id"])
+        if not p:
+            return jsonify({"error": "Profile not found."}), 404
+        profile = p.to_dict()
+    else:
+        profile = get_active_profile_dict()
+
+    try:
+        cost_bps = max(0.0, float(d.get("cost_bps", 0) or 0))
+    except (TypeError, ValueError):
+        cost_bps = 0.0
+
+    # Fetch up to 3y once (warm-up + test window both come from this).
+    hist = fetch_history(symbol, period="3y")
+    if hist is None or len(hist) < 60:
+        return jsonify({"error": f"Not enough history for {symbol}."}), 404
+
+    try:
+        result = run_backtest(symbol, hist, profile,
+                              start=d.get("start"), end=d.get("end"), cost_bps=cost_bps)
+        if "error" in result:
+            return jsonify(result), 400
+        result["profile_name"] = profile.get("name", "Active profile")
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

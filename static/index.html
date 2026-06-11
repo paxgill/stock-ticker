@@ -238,6 +238,7 @@
       <button class="tab-btn" data-tab="correlation" onclick="switchTab('correlation',this)">CORRELATION</button>
       <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
       <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
+      <button class="tab-btn" data-tab="backtest" onclick="switchTab('backtest',this)">BACKTEST</button>
       <button class="tab-btn" data-tab="optsig" onclick="switchTab('optsig',this)">⚡ OPT SIGNALS</button>
     </nav>
     <div class="dash-right">
@@ -506,6 +507,22 @@
       <div class="loading-screen"><div class="loading-spinner"></div><div>Loading journal...</div></div>
     </div>
   </div>
+
+  <!-- BACKTEST TAB -->
+  <div id="tab-backtest" class="tab-content">
+    <div class="bt-banner">⚠ Hypothetical results. Simulated signals replayed on past data — not a track record, not financial advice, and not indicative of future returns.</div>
+    <div class="bt-toolbar">
+      <input type="text" id="bt-symbol" class="bt-input" placeholder="Symbol (e.g. AAPL)" maxlength="12" style="text-transform:uppercase">
+      <select id="bt-profile" class="bt-input"></select>
+      <label class="bt-field">From <input type="date" id="bt-start" class="bt-input"></label>
+      <label class="bt-field">To <input type="date" id="bt-end" class="bt-input"></label>
+      <label class="bt-field">Costs <input type="number" id="bt-bps" class="bt-input" value="0" min="0" max="100" step="1" style="width:64px"> bps/side</label>
+      <button class="btn-primary" id="bt-run" onclick="runBacktest()">Run backtest</button>
+    </div>
+    <div id="bt-result" class="bt-result">
+      <div class="empty-state"><h3>No backtest yet</h3><p>Pick a symbol and profile, then run a walk-forward simulation (capped at 1 symbol × 3 years).</p></div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════ MODALS -->
@@ -580,6 +597,11 @@
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button class="btn-primary" onclick="openProfileEditor(null)">+ NEW PROFILE</button>
         <button class="btn-ghost" onclick="openStrategyQuiz('pe')">▶ Find My Strategy (Quiz)</button>
+      </div>
+      <div class="setting-group" style="margin-top:18px">
+        <label class="setting-label">RESEARCH-GROUNDED STRATEGIES</label>
+        <p class="muted" style="font-size:11px;margin:2px 0 10px">Start from a preset that follows a published style of research. Each describes what it believes — none claims endorsement by any firm.</p>
+        <div class="research-presets" id="research-presets"></div>
       </div>
     </div>
     <!-- Alerts -->
@@ -785,6 +807,17 @@
         <button class="btn-primary" onclick="saveTierNotes()">SAVE</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Signal Breakdown (explainability) Modal -->
+<div id="signal-detail-modal" class="modal-overlay" onclick="closeModalOverlay(event,'signal-detail-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="sd-title">SIGNAL BREAKDOWN</div>
+      <button class="modal-close" onclick="closeModal('signal-detail-modal')">✕</button>
+    </div>
+    <div class="settings-body" id="sd-body"><!-- populated by openSignalDetail() --></div>
   </div>
 </div>
 

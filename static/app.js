@@ -94,6 +94,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     loadProfiles(),
     loadPreferences(),
     loadStrategyPresets(),
+    loadResearchPresets(),
   ]);
 
   // Migrate old localStorage state if DB is empty
@@ -712,6 +713,7 @@ function switchTab(name, btn) {
   if (name === 'correlation') renderCorrelationTab();
   if (name === 'portfolio')   { loadPortfolio().then(renderPortfolio); }
   if (name === 'journal')     { loadTrades().then(renderJournal); }
+  if (name === 'backtest')    renderBacktestTab();
   if (name === 'optsig')      renderOptSigTab();
 }
 
@@ -759,13 +761,21 @@ function renderSignalsContent() {
         <div class="reason-icon ${r.direction === 'bull' ? 'reason-bull' : r.direction === 'bear' ? 'reason-bear' : 'reason-neutral'}"></div>
         <div class="reason-text"><strong>${r.name}</strong> — ${r.reason}</div>
       </div>`).join('');
+    const reg = s.regime && s.regime.label && s.regime.label !== 'Undetermined' ? s.regime : null;
+    const regBadge = reg
+      ? `<span class="regime-badge ${reg.volatile ? 'regime-volatile' : ''}" title="ADX ${reg.adx ?? '—'}, ATR% ${reg.atr_pct ?? '—'} (median ${reg.atr_pct_median ?? '—'})">${esc(reg.label)}</span>`
+      : '';
+    const stopLine = s.suggested_stop
+      ? `<div class="signal-stop">Suggested stop <strong>$${s.suggested_stop.price.toFixed(2)}</strong> <span class="muted">· ${esc(s.suggested_stop.basis)}</span></div>`
+      : '';
     return `
-      <div class="signal-card">
+      <div class="signal-card" onclick="openSignalDetail('${s.symbol}')" style="cursor:pointer" title="Click for the full breakdown">
         <div class="card-accent-bar ${s.signal === 'BUY' ? 'bullish' : s.signal === 'SELL' ? 'bearish' : ''}" style="position:absolute;left:0;top:0;width:3px;height:100%"></div>
         <div class="signal-card-header">
           <div>
             <div class="signal-sym">${s.symbol}</div>
-            <div class="signal-name">${s.name || ''} ${s.tier ? `<span class="tier-badge ${tierClass(s.tier)}">${s.tier}</span>` : ''}</div>
+            <div class="signal-name">${esc(s.name || '')} ${s.tier ? `<span class="tier-badge ${tierClass(s.tier)}">${esc(s.tier)}</span>` : ''}</div>
+            ${regBadge}
           </div>
           <span class="suggestion-badge ${sigClass}">${s.signal === 'BUY' ? '🟢' : s.signal === 'SELL' ? '🔴' : '🟡'} ${s.signal}</span>
           <div class="confidence-bar-wrap">
@@ -775,12 +785,14 @@ function renderSignalsContent() {
           <div class="signal-price">$${s.price ? s.price.toFixed(2) : '—'}</div>
         </div>
         <div class="signal-reasons">${reasons}</div>
-        ${s.description ? `<div class="signal-description">${s.description}</div>` : ''}
+        ${stopLine}
+        ${s.description ? `<div class="signal-description">${esc(s.description)}</div>` : ''}
         <div class="signal-card-footer">
-          <div class="tier-info">Risk: ${s.risk_tolerance || '—'}</div>
+          <div class="tier-info">Risk: ${esc(s.risk_tolerance || '—')}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <button class="log-trade-btn" onclick="openChart('${s.symbol}')">📈 Chart</button>
-            <button class="log-trade-btn" onclick="openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
+            <button class="log-trade-btn" onclick="event.stopPropagation();openSignalDetail('${s.symbol}')">Why this score?</button>
+            <button class="log-trade-btn" onclick="event.stopPropagation();openChart('${s.symbol}')">📈 Chart</button>
+            <button class="log-trade-btn" onclick="event.stopPropagation();openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
               ${s.signal === 'BUY' ? '+ Log Buy' : s.signal === 'SELL' ? '+ Log Sell' : '+ Log Trade'}
             </button>
           </div>
@@ -795,6 +807,221 @@ function exportSuggestionsCSV() {
 
 function printSuggestions() {
   window.print();
+}
+
+// ════════════════════════════════════════════════════════════════
+// SIGNAL EXPLAINABILITY MODAL (Phase 2f)
+// ════════════════════════════════════════════════════════════════
+const FAMILY_LABEL = { trend: 'Trend', momentum: 'Momentum', volume_flow: 'Volume flow', oscillator: 'Oscillator' };
+
+function openSignalDetail(symbol) {
+  const s = (S.suggestions || []).find(x => x.symbol === symbol);
+  const body = document.getElementById('sd-body');
+  document.getElementById('sd-title').textContent = `${symbol} — signal breakdown`;
+  if (!s) { body.innerHTML = '<p class="muted">No analysis available for this ticker.</p>'; openModal('signal-detail-modal'); return; }
+
+  const sigColor = s.signal === 'BUY' ? 'var(--green)' : s.signal === 'SELL' ? 'var(--red)' : 'var(--yellow)';
+  const reg = s.regime || {};
+  const regClass = reg.volatile ? 'regime-volatile' : '';
+
+  // Per-family contribution bars (weight × score → contribution)
+  const fams = s.families || {};
+  const maxContrib = Math.max(0.01, ...Object.values(fams).map(f => Math.abs(f.contribution || 0)));
+  const famRows = Object.entries(fams).map(([k, f]) => {
+    const pos = (f.contribution || 0) >= 0;
+    const w = Math.abs(f.contribution || 0) / maxContrib * 100;
+    return `
+      <div class="sd-fam-row">
+        <div class="sd-fam-name">${FAMILY_LABEL[k] || k}
+          <span class="muted">(score ${(f.score>=0?'+':'')}${f.score?.toFixed(2)} × wt ${f.eff_weight?.toFixed(2)})</span>
+        </div>
+        <div class="sd-fam-track">
+          <div class="sd-fam-fill ${pos ? 'pos' : 'neg'}" style="width:${w.toFixed(0)}%"></div>
+        </div>
+        <div class="sd-fam-val ${pos ? 'up' : 'down'}">${pos?'+':''}${(f.contribution||0).toFixed(3)}</div>
+      </div>`;
+  }).join('') || '<p class="muted">No family data.</p>';
+
+  // Confirmation outcomes
+  const c = s.confirmations || {};
+  const confItems = [];
+  confItems.push(`<li>${c.families_agreeing ?? 0} of ${c.required ?? 2} signal families agree${c.agreeing_families?.length ? ` (${c.agreeing_families.join(', ')})` : ''}.</li>`);
+  if (c.regime_gate_applied) confItems.push('<li>Regime gate: signal opposed the prevailing trend, so it was capped to HOLD.</li>');
+  if (c.capped_to_hold && !c.regime_gate_applied) confItems.push('<li>Not enough independent confirmation — capped to HOLD.</li>');
+  (c.notes || []).forEach(n => confItems.push(`<li>${esc(n)}</li>`));
+
+  // Suggested stop math
+  const stop = s.suggested_stop;
+  const sizing = s.position_sizing;
+  const stopHtml = stop ? `
+    <div class="sd-section">
+      <div class="sd-section-title">Suggested stop <span class="muted">(illustrative, not advice)</span></div>
+      <div class="sd-stop-math">
+        <div>Entry reference: <strong>$${s.price?.toFixed(2)}</strong></div>
+        <div>ATR(14): <strong>$${stop.atr?.toFixed(2)}</strong> × ${stop.atr_multiple} (${esc(reg.label || '—')})</div>
+        <div>Stop distance: <strong>$${stop.distance?.toFixed(2)}</strong> (${stop.pct?.toFixed(1)}%)</div>
+        <div>${stop.side === 'long' ? 'Long' : 'Short'} stop: <strong style="color:${sigColor}">$${stop.price?.toFixed(2)}</strong></div>
+        ${sizing && sizing.position_pct ? `<div class="muted" style="margin-top:6px">${esc(sizing.note)}</div>` : ''}
+      </div>
+    </div>` : '';
+
+  body.innerHTML = `
+    <div class="sd-head">
+      <span class="suggestion-badge ${s.signal === 'BUY' ? 'sug-buy' : s.signal === 'SELL' ? 'sug-sell' : 'sug-hold'}">${s.signal}</span>
+      <span class="sd-conf" style="color:${sigColor}">${s.confidence}% confidence</span>
+      <span class="muted">weighted score ${(s.weighted_score>=0?'+':'')}${s.weighted_score?.toFixed(3)}</span>
+    </div>
+
+    <div class="sd-section">
+      <div class="sd-section-title">Market regime</div>
+      <div class="sd-regime ${regClass}">
+        <span class="regime-badge ${regClass}">${esc(reg.label || 'Undetermined')}</span>
+        <span class="muted">ADX ${reg.adx ?? '—'} · ATR% ${reg.atr_pct ?? '—'} (50d median ${reg.atr_pct_median ?? '—'})${reg.haircut && reg.haircut !== 1 ? ` · confidence ×${reg.haircut}` : ''}</span>
+      </div>
+    </div>
+
+    <div class="sd-section">
+      <div class="sd-section-title">Family contributions <span class="muted">(weight × score)</span></div>
+      ${famRows}
+    </div>
+
+    <div class="sd-section">
+      <div class="sd-section-title">Confirmation rules</div>
+      <ul class="sd-conf-list">${confItems.join('')}</ul>
+    </div>
+
+    ${stopHtml}
+
+    <div class="sd-section" id="sd-ai-slot"><!-- Fable explanation renders here in Phase 3 --></div>
+
+    <div class="sd-disclaimer">${esc(s.disclaimer || 'Algorithmic output, not financial advice. Do your own research before trading.')}</div>
+  `;
+  openModal('signal-detail-modal');
+}
+
+// ════════════════════════════════════════════════════════════════
+// BACKTEST TAB (Phase 2e)
+// ════════════════════════════════════════════════════════════════
+function renderBacktestTab() {
+  // Populate the profile picker: research presets + saved profiles
+  const sel = document.getElementById('bt-profile');
+  if (sel && !sel.dataset.ready) {
+    const presetOpts = (S.researchPresets || []).map(p =>
+      `<option value="preset:${p.key}">Preset — ${esc(p.name)}</option>`).join('');
+    const profOpts = (S.profiles || []).map(p =>
+      `<option value="profile:${p.id}">${esc(p.name)}${p.is_active ? ' (active)' : ''}</option>`).join('');
+    sel.innerHTML = `<option value="">Active profile</option>${profOpts}${presetOpts}`;
+    sel.dataset.ready = '1';
+  }
+  // Default dates: last 2 years
+  const end = document.getElementById('bt-end'), start = document.getElementById('bt-start');
+  if (end && !end.value) end.value = new Date().toISOString().slice(0, 10);
+  if (start && !start.value) {
+    const d = new Date(); d.setFullYear(d.getFullYear() - 2);
+    start.value = d.toISOString().slice(0, 10);
+  }
+  // Prefill symbol from first watchlist item
+  const symEl = document.getElementById('bt-symbol');
+  if (symEl && !symEl.value && S.watchlist.length) symEl.value = S.watchlist[0].symbol;
+}
+
+async function loadResearchPresets() {
+  try { S.researchPresets = await api.get('/api/presets'); }
+  catch (e) { S.researchPresets = []; }
+}
+
+async function runBacktest() {
+  const symbol = (document.getElementById('bt-symbol').value || '').trim().toUpperCase();
+  const result = document.getElementById('bt-result');
+  const runBtn = document.getElementById('bt-run');
+  if (!symbol) { showToast('Enter a symbol to backtest.', 'error'); return; }
+
+  const body = { symbol, start: document.getElementById('bt-start').value,
+                 end: document.getElementById('bt-end').value,
+                 cost_bps: parseFloat(document.getElementById('bt-bps').value) || 0 };
+  const pick = document.getElementById('bt-profile').value;
+  if (pick.startsWith('preset:')) body.preset_key = pick.slice(7);
+  else if (pick.startsWith('profile:')) body.profile_id = parseInt(pick.slice(8));
+
+  runBtn.disabled = true; runBtn.textContent = 'Running…';
+  result.innerHTML = `<div class="loading-screen"><div class="loading-spinner"></div><div>Replaying the engine day by day…</div></div>`;
+  try {
+    const bt = await api.post('/api/backtest', body);
+    renderBacktestResult(bt);
+  } catch (e) {
+    result.innerHTML = `<div class="no-profile-msg">Backtest failed: ${esc(e.message || 'unknown error')}</div>`;
+  } finally {
+    runBtn.disabled = false; runBtn.textContent = 'Run backtest';
+  }
+}
+
+function renderBacktestResult(bt) {
+  const result = document.getElementById('bt-result');
+  const st = bt.stats || {};
+  const outperf = (st.total_return_pct ?? 0) - (st.buy_hold_return_pct ?? 0);
+  const stat = (label, val, cls = '') => `
+    <div class="bt-stat"><div class="bt-stat-label">${label}</div><div class="bt-stat-val ${cls}">${val}</div></div>`;
+
+  const pfDisplay = (st.profit_factor === null || st.profit_factor === undefined) ? '—'
+                  : (st.profit_factor === 'Infinity' || st.profit_factor === Infinity ? '∞' : st.profit_factor);
+
+  const stripHtml = `
+    <div class="bt-statstrip">
+      ${stat('Strategy return', `${st.total_return_pct >= 0 ? '+' : ''}${st.total_return_pct}%`, st.total_return_pct >= 0 ? 'up' : 'down')}
+      ${stat('Buy &amp; hold', `${st.buy_hold_return_pct >= 0 ? '+' : ''}${st.buy_hold_return_pct}%`, st.buy_hold_return_pct >= 0 ? 'up' : 'down')}
+      ${stat('vs B&amp;H', `${outperf >= 0 ? '+' : ''}${outperf.toFixed(1)}%`, outperf >= 0 ? 'up' : 'down')}
+      ${stat('Trades', st.trades)}
+      ${stat('Hit rate', `${st.hit_rate}%`)}
+      ${stat('Profit factor', pfDisplay)}
+      ${stat('Max drawdown', `-${st.max_drawdown_pct}%`, 'down')}
+      ${stat('Exposure', `${st.exposure_pct}%`)}
+    </div>`;
+
+  const trades = bt.trades || [];
+  const tradeRows = trades.length ? trades.map(t => `
+    <tr>
+      <td>${esc(t.entry_date)}</td><td>$${t.entry_price}</td>
+      <td>${esc(t.exit_date)}</td><td>$${t.exit_price}</td>
+      <td class="${t.return_pct >= 0 ? 'up' : 'down'}">${t.return_pct >= 0 ? '+' : ''}${t.return_pct}%</td>
+      <td><span class="bt-exit-tag">${esc(t.exit_reason)}</span></td>
+    </tr>`).join('') : `<tr><td colspan="6" class="muted" style="text-align:center">No trades were taken in this window.</td></tr>`;
+
+  result.innerHTML = `
+    <div class="bt-meta">${esc(bt.symbol)} · ${esc(bt.profile_name || 'profile')} · ${esc(bt.start || '')} → ${esc(bt.end || '')}${bt.cost_bps ? ` · ${bt.cost_bps} bps/side` : ''}</div>
+    ${stripHtml}
+    <div id="bt-equity-chart" class="bt-chart"></div>
+    <div class="bt-table-wrap">
+      <table class="bt-table">
+        <thead><tr><th>Entry</th><th>@</th><th>Exit</th><th>@</th><th>Return</th><th>Reason</th></tr></thead>
+        <tbody>${tradeRows}</tbody>
+      </table>
+    </div>
+    <div class="sd-disclaimer">${esc(bt.disclaimer || '')}</div>
+  `;
+
+  // Equity curve: strategy vs buy-and-hold (indexed to 100)
+  const curve = bt.equity_curve || [];
+  const dates = curve.map(p => p.date);
+  const strat = curve.map(p => +(p.strategy * 100).toFixed(2));
+  const bh = curve.map(p => +(p.buy_hold * 100).toFixed(2));
+  if (window.Plotly && curve.length) {
+    const traces = [
+      { x: dates, y: strat, name: 'Strategy', type: 'scatter', mode: 'lines',
+        line: { color: '#e8a33d', width: 2 } },
+      { x: dates, y: bh, name: 'Buy & hold', type: 'scatter', mode: 'lines',
+        line: { color: '#6b7280', width: 1.5, dash: 'dot' } },
+    ];
+    const layout = {
+      margin: { l: 44, r: 12, t: 10, b: 36 },
+      paper_bgcolor: '#0a0a0b', plot_bgcolor: '#111114',
+      font: { color: '#9898a8', size: 11, family: 'monospace' },
+      xaxis: { gridcolor: '#1e1e24', showgrid: true },
+      yaxis: { gridcolor: '#1e1e24', title: 'Equity (start = 100)', zeroline: false },
+      legend: { orientation: 'h', x: 0, y: 1.12 },
+      showlegend: true, height: 300,
+    };
+    Plotly.newPlot('bt-equity-chart', traces, layout, { responsive: true, displayModeBar: false });
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1193,22 +1420,62 @@ function applyPreferences() {
 
 function renderProfilesList() {
   const el = document.getElementById('profiles-list');
+  const presetName = (key) => (S.researchPresets || []).find(p => p.key === key)?.name || key;
   if (S.profiles.length === 0) {
     el.innerHTML = '<p style="color:var(--text3);font-size:12px">No profiles yet. Create one below.</p>';
-    return;
+  } else {
+    el.innerHTML = S.profiles.map(p => `
+      <div class="profile-item ${p.is_active ? 'is-active' : ''}">
+        <div>
+          <div class="profile-item-name">${esc(p.name)} ${p.is_active ? '<span class="profile-active-badge">ACTIVE</span>' : ''}</div>
+          <div class="profile-item-meta">${esc(p.risk_tolerance)} · ${esc(p.horizon)} · Max ${p.max_trades_per_day} trades/day${p.preset_key ? ` · <span class="based-on">based on: ${esc(presetName(p.preset_key))}</span>` : ''}</div>
+        </div>
+        <div class="profile-item-actions">
+          ${!p.is_active ? `<button class="btn-sm" onclick="activateProfile(${p.id})">SET ACTIVE</button>` : ''}
+          <button class="btn-sm" onclick="openProfileEditor(${p.id})">EDIT</button>
+          <button class="btn-sm" style="color:var(--red);border-color:rgba(255,82,82,.3)" onclick="deleteProfile(${p.id})">DEL</button>
+        </div>
+      </div>`).join('');
   }
-  el.innerHTML = S.profiles.map(p => `
-    <div class="profile-item ${p.is_active ? 'is-active' : ''}">
-      <div>
-        <div class="profile-item-name">${esc(p.name)} ${p.is_active ? '<span class="profile-active-badge">ACTIVE</span>' : ''}</div>
-        <div class="profile-item-meta">${esc(p.risk_tolerance)} · ${esc(p.horizon)} · Max ${p.max_trades_per_day} trades/day</div>
+  renderResearchPresets();
+}
+
+function renderResearchPresets() {
+  const el = document.getElementById('research-presets');
+  if (!el) return;
+  const presets = S.researchPresets || [];
+  if (!presets.length) { el.innerHTML = '<p class="muted" style="font-size:11px">Presets unavailable.</p>'; return; }
+  el.innerHTML = presets.map(p => {
+    const w = p.weights || {};
+    return `
+    <div class="research-preset">
+      <div class="rp-head">
+        <div>
+          <div class="rp-name">${esc(p.name)}</div>
+          <div class="rp-research muted">${esc(p.research)} · ${esc(p.risk_tolerance)} · ${esc(p.horizon)}</div>
+        </div>
+        <button class="btn-sm" onclick="useResearchPreset('${p.key}')">Use this</button>
       </div>
-      <div class="profile-item-actions">
-        ${!p.is_active ? `<button class="btn-sm" onclick="activateProfile(${p.id})">SET ACTIVE</button>` : ''}
-        <button class="btn-sm" onclick="openProfileEditor(${p.id})">EDIT</button>
-        <button class="btn-sm" style="color:var(--red);border-color:rgba(255,82,82,.3)" onclick="deleteProfile(${p.id})">DEL</button>
-      </div>
-    </div>`).join('');
+      <details class="rp-details">
+        <summary>What this strategy believes</summary>
+        <p>${esc(p.believes)}</p>
+        <div class="rp-weights muted">Weights — trend ${Math.round((w.trend||0)*100)}% · momentum ${Math.round((w.momentum||0)*100)}% · volume ${Math.round((w.volume_flow||0)*100)}% · oscillator ${Math.round((w.oscillator||0)*100)}%${p.requires_fundamentals ? ' · requires fundamentals gate' : ''}</div>
+      </details>
+    </div>`;
+  }).join('');
+}
+
+async function useResearchPreset(key) {
+  const p = (S.researchPresets || []).find(x => x.key === key);
+  if (!await confirmDialog(`Create and activate a profile based on "${p ? p.name : key}"?`, { title: 'Use research strategy', confirmText: 'Create & activate', danger: false })) return;
+  try {
+    await api.post(`/api/profiles/from-preset/${key}`, { is_active: true });
+    await loadProfiles();
+    renderProfilesList();
+    showToast(`Active strategy set to ${p ? p.name : key}.`, 'success');
+  } catch (e) {
+    showToast(e.message || 'Failed to create profile.', 'error');
+  }
 }
 
 function renderSettingsAlerts() {
