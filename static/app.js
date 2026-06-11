@@ -21,6 +21,9 @@ const S = {
   presetLocked: { ob: false, pe: false },
   quizAnswers: [null, null, null, null, null],
   aiEnabled: false,
+  activeTagFilter: null,
+  alertEvents: [],
+  lastQuoteRefresh: null,
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -141,7 +144,95 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   initElectronControls();
+  registerServiceWorker();
+  initKeyboardShortcuts();
+  startAlertPolling();
 });
+
+// ── PWA service worker ──
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+}
+
+// ── Keyboard shortcuts (1–8 tabs, r refresh, a add, t theme, ? help) ──
+const _TAB_ORDER = ['dashboard','signals','heatmap','correlation','portfolio','journal','backtest','optsig'];
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.getElementById('onboarding').classList.contains('active')) return;
+    if (e.key >= '1' && e.key <= '8') {
+      const name = _TAB_ORDER[parseInt(e.key) - 1];
+      const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
+      if (btn) { switchTab(name, btn); }
+    } else if (e.key === 'r') { fetchAllQuotes(); }
+    else if (e.key === 'a') { e.preventDefault(); document.getElementById('dash-ticker-input')?.focus(); }
+    else if (e.key === 't') { toggleTheme(); }
+    else if (e.key === '?') { openShortcutsHelp(); }
+  });
+}
+function openShortcutsHelp() {
+  let m = document.getElementById('shortcuts-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'shortcuts-modal'; m.className = 'modal-overlay';
+    m.onclick = (e) => { if (e.target === m) m.classList.remove('open'); };
+    m.innerHTML = `<div class="modal-box modal-box-sm">
+      <div class="modal-header"><div class="modal-title">Keyboard shortcuts</div>
+        <button class="modal-close" onclick="document.getElementById('shortcuts-modal').classList.remove('open')">✕</button></div>
+      <div class="settings-body">
+        <table class="shortcuts-table">
+          <tr><td><kbd>1</kbd>–<kbd>8</kbd></td><td>Switch tabs</td></tr>
+          <tr><td><kbd>r</kbd></td><td>Refresh quotes</td></tr>
+          <tr><td><kbd>a</kbd></td><td>Focus add-ticker</td></tr>
+          <tr><td><kbd>t</kbd></td><td>Toggle theme</td></tr>
+          <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+        </table>
+      </div></div>`;
+    document.body.appendChild(m);
+  }
+  m.classList.add('open');
+}
+
+// ── Alert events bell (server-side alert engine) ──
+let _alertPollTimer = null;
+function startAlertPolling() {
+  pollAlertEvents();
+  _alertPollTimer = setInterval(pollAlertEvents, 60000);
+}
+async function pollAlertEvents() {
+  try {
+    const events = await api.get('/api/alerts/events');
+    const btn = document.getElementById('notif-btn');
+    if (!btn) return;
+    let badge = document.getElementById('alert-badge');
+    if (events.length) {
+      if (!badge) { badge = document.createElement('span'); badge.id = 'alert-badge'; badge.className = 'alert-badge'; btn.appendChild(badge); }
+      badge.textContent = events.length;
+      btn.title = events.map(e => `${e.symbol} ${e.direction} ${e.threshold} (now ${e.price})`).join('\n');
+      S.alertEvents = events;
+    } else if (badge) { badge.remove(); }
+  } catch (e) { /* ignore */ }
+}
+async function markAlertsSeen() {
+  try { await api.post('/api/alerts/events/seen', {}); document.getElementById('alert-badge')?.remove(); } catch (e) {}
+}
+
+// ── Downloads via fetch→Blob (replaces window.location.href) ──
+async function downloadFile(url, filename) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('Download failed');
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) { showToast('Download failed.', 'error'); }
+}
 
 async function loadWatchlist() {
   try { S.watchlist = await api.get('/api/watchlist'); } catch (e) { S.watchlist = []; }
@@ -606,10 +697,53 @@ function isAfterHours()  { const { day, h } = _etTime(); return day >= 1 && day 
 function renderDashboard() {
   const el = document.getElementById('dashboard-content');
   if (S.watchlist.length === 0) {
-    el.innerHTML = `<div class="empty-state"><h3>No tickers</h3><p>Add ticker symbols using the input above.</p></div>`;
+    el.innerHTML = `<div class="empty-state"><h3>No tickers yet</h3><p>Add your first ticker with the input above to start tracking signals.</p></div>`;
     return;
   }
   S.preferences.density === 'expanded' ? renderExpanded(el) : renderCompact(el);
+  el.insertAdjacentHTML('afterbegin', buildDashPrefix());
+}
+
+// Tag filtering
+function allTags() {
+  const set = new Set();
+  S.watchlist.forEach(t => (t.tags || []).forEach(tg => set.add(tg)));
+  return [...set].sort();
+}
+function visibleWatchlist() {
+  if (!S.activeTagFilter) return S.watchlist;
+  return S.watchlist.filter(t => (t.tags || []).includes(S.activeTagFilter));
+}
+function setTagFilter(tag) {
+  S.activeTagFilter = (S.activeTagFilter === tag) ? null : tag;
+  renderDashboard();
+}
+
+// Stale-data banner + tag filter + 14-day earnings strip above the cards
+function buildDashPrefix() {
+  let html = '';
+  const anyStale = Object.values(S.quotes || {}).some(q => q && q.stale);
+  if (anyStale) {
+    html += `<div class="stale-banner">Showing last-known prices — live data is temporarily unavailable.</div>`;
+  }
+  const tags = allTags();
+  if (tags.length) {
+    html += `<div class="tag-filter-bar"><span class="earnings-strip-label">Tags</span>` +
+      tags.map(tg => `<span class="tag-filter-chip ${S.activeTagFilter === tg ? 'active' : ''}" onclick="setTagFilter('${esc(tg)}')">${esc(tg)}</span>`).join('') +
+      (S.activeTagFilter ? `<span class="tag-filter-chip" onclick="setTagFilter(null)">clear</span>` : '') + `</div>`;
+  }
+  const upcoming = S.watchlist
+    .map(t => ({ sym: t.symbol, d: (S.tickerDetails[t.symbol] || {}).days_to_earn }))
+    .filter(x => x.d != null && x.d >= 0 && x.d <= 14)
+    .sort((a, b) => a.d - b.d);
+  if (upcoming.length) {
+    const chips = upcoming.map(x => {
+      const label = x.d === 0 ? 'today' : x.d === 1 ? 'tomorrow' : `${x.d}d`;
+      return `<span class="earn-chip ${x.d <= 2 ? 'soon' : ''}" onclick="openChart('${x.sym}')">${x.sym} · ${label}</span>`;
+    }).join('');
+    html += `<div class="earnings-strip"><span class="earnings-strip-label">${svgIcon('calendar',12)} Earnings (14d)</span>${chips}</div>`;
+  }
+  return html;
 }
 
 function renderCompact(el) {
@@ -617,7 +751,7 @@ function renderCompact(el) {
   const showPre  = isPreMarket();
   const showPost = isAfterHours();
 
-  const cards = S.watchlist.map(t => {
+  const cards = visibleWatchlist().map(t => {
     const q   = S.quotes[t.symbol];
     const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
@@ -673,6 +807,7 @@ function renderCompact(el) {
             <div class="card-meta">
               <span class="card-name">${esc(t.name)}</span>
               <span class="tier-badge ${tierClass(t.tier)}">${esc(t.tier)}</span>
+              ${(t.tags || []).map(tg => `<span class="tag-chip">${esc(tg)}</span>`).join('')}
             </div>
           </div>
           <div class="card-price-block">
@@ -704,7 +839,7 @@ function renderCompact(el) {
 }
 
 function renderExpanded(el) {
-  const rows = S.watchlist.map(t => {
+  const rows = visibleWatchlist().map(t => {
     const q   = S.quotes[t.symbol];
     const ext = S.tickerDetails[t.symbol] || {};
     const sug = S.suggestions.find(s => s.symbol === t.symbol);
@@ -869,8 +1004,89 @@ function renderSignalsContent() {
   }).join('');
 }
 
-function exportSuggestionsCSV() {
-  window.location.href = '/api/suggestions/export/csv';
+function exportSuggestionsCSV() { downloadFile('/api/suggestions/export/csv', 'suggestions.csv'); }
+function exportPortfolioCSV() { downloadFile('/api/portfolio/export/csv', 'portfolio.csv'); }
+
+// ── Compare mode (normalized %-change overlay, up to 4 tickers) ──
+let _compareRange = '1Y';
+function openCompare() {
+  if (!S.watchlist.length) { showToast('Add tickers first.', 'error'); return; }
+  S.compareSel = S.compareSel || S.watchlist.slice(0, Math.min(2, S.watchlist.length)).map(t => t.symbol);
+  renderComparePicker();
+  openModal('compare-modal');
+  runCompare();
+}
+function renderComparePicker() {
+  document.getElementById('compare-picker').innerHTML = S.watchlist.map(t => {
+    const on = S.compareSel.includes(t.symbol);
+    return `<label class="compare-chip ${on ? 'on' : ''}"><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleCompare('${t.symbol}')"> ${esc(t.symbol)}</label>`;
+  }).join('');
+}
+function toggleCompare(sym) {
+  const i = S.compareSel.indexOf(sym);
+  if (i >= 0) S.compareSel.splice(i, 1);
+  else { if (S.compareSel.length >= 4) { showToast('Up to 4 tickers.', 'error'); renderComparePicker(); return; } S.compareSel.push(sym); }
+  renderComparePicker(); runCompare();
+}
+function setCompareRange(r) {
+  _compareRange = r;
+  document.querySelectorAll('#compare-ranges .btn-sm').forEach(b => b.classList.toggle('active', b.textContent === r));
+  runCompare();
+}
+async function runCompare() {
+  if (!S.compareSel || !S.compareSel.length) { document.getElementById('compare-chart').innerHTML = ''; return; }
+  try {
+    const data = await api.post('/api/compare', { tickers: S.compareSel, range: _compareRange });
+    if (!window.Plotly) return;
+    const c = chartColors();
+    const palette = [c.accent, '#5b8def', '#2fbf71', '#e5484d'];
+    const traces = Object.keys(data.series).map((sym, i) => ({
+      x: data.dates, y: data.series[sym], name: sym, type: 'scatter', mode: 'lines',
+      line: { color: palette[i % palette.length], width: 2 },
+    }));
+    const layout = {
+      margin: { l: 46, r: 12, t: 10, b: 36 }, height: 340,
+      paper_bgcolor: c.surface, plot_bgcolor: c.plot,
+      font: { color: c.text, size: 11, family: 'JetBrains Mono, monospace' },
+      xaxis: { gridcolor: c.grid }, yaxis: { gridcolor: c.grid, ticksuffix: '%', title: '% change' },
+      legend: { orientation: 'h', x: 0, y: 1.12 }, showlegend: true,
+    };
+    Plotly.newPlot('compare-chart', traces, layout, { responsive: true, displayModeBar: false });
+  } catch (e) { document.getElementById('compare-chart').innerHTML = '<p class="muted">Could not load comparison.</p>'; }
+}
+
+// ── CSV / bulk import (watchlist + portfolio) ──
+let _csvImportType = 'watchlist';
+function openCsvImport(type) {
+  _csvImportType = type;
+  const isWl = type === 'watchlist';
+  document.getElementById('csv-import-title').textContent = isWl ? 'Import watchlist' : 'Import positions';
+  document.getElementById('csv-import-hint').textContent = isWl
+    ? 'Paste tickers separated by commas, spaces, or new lines.'
+    : 'Paste rows as: symbol,shares,cost_basis,date (date optional, YYYY-MM-DD).';
+  const ta = document.getElementById('csv-import-text');
+  ta.value = ''; ta.placeholder = isWl ? 'AAPL, MSFT, NVDA' : 'AAPL,10,150,2024-01-15\nMSFT,5,300';
+  document.getElementById('csv-import-result').innerHTML = '';
+  openModal('csv-import-modal');
+}
+async function runCsvImport() {
+  const text = document.getElementById('csv-import-text').value;
+  const res = document.getElementById('csv-import-result');
+  const url = _csvImportType === 'watchlist' ? '/api/watchlist/import' : '/api/portfolio/import';
+  res.innerHTML = '<span class="muted">Importing…</span>';
+  try {
+    const r = await api.post(url, { text });
+    res.innerHTML = (r.results || []).map(x => {
+      const ok = x.status === 'added';
+      const label = x.symbol || x.row || '';
+      return `<div class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✕'} ${esc(label)} — ${esc(x.status)}</div>`;
+    }).join('') || '<span class="muted">Nothing to import.</span>';
+    if (r.added) {
+      if (_csvImportType === 'watchlist') { await loadWatchlist(); renderDashboard(); fetchAllQuotes(); }
+      else { await loadPortfolio(); renderPortfolio(); }
+      showToast(`Imported ${r.added} ${_csvImportType === 'watchlist' ? 'tickers' : 'positions'}.`, 'success');
+    }
+  } catch (e) { res.innerHTML = `<span class="bad">Import failed: ${esc(e.message || '')}</span>`; }
 }
 
 function printSuggestions() {
@@ -1478,9 +1694,41 @@ function openLogTrade() {
   document.getElementById('trade-price').value = '';
   document.getElementById('trade-date').value = new Date().toISOString().split('T')[0];
   document.getElementById('trade-pnl').value = '';
+  document.getElementById('trade-pnl').dataset.auto = '';
   document.getElementById('trade-notes').value = '';
   document.getElementById('trade-signal-cb').checked = false;
+  attachFifoPrefill();
   openModal('trade-modal');
+}
+
+// When logging a Sell/Cover, auto-prefill realized P&L via FIFO (editable).
+let _fifoAttached = false;
+function attachFifoPrefill() {
+  if (_fifoAttached) return;
+  _fifoAttached = true;
+  ['trade-symbol', 'trade-shares', 'trade-price'].forEach(id =>
+    document.getElementById(id)?.addEventListener('input', maybeFifoPrefill));
+  document.querySelectorAll('[name="trade-action"]').forEach(r =>
+    r.addEventListener('change', maybeFifoPrefill));
+}
+async function maybeFifoPrefill() {
+  const action = document.querySelector('[name="trade-action"]:checked')?.value;
+  const pnlEl = document.getElementById('trade-pnl');
+  if (!['Sell', 'Cover'].includes(action)) return;
+  // Don't clobber a value the user typed themselves
+  if (pnlEl.value && pnlEl.dataset.auto !== '1') return;
+  const symbol = document.getElementById('trade-symbol').value.trim().toUpperCase();
+  const shares = parseFloat(document.getElementById('trade-shares').value);
+  const price = parseFloat(document.getElementById('trade-price').value);
+  if (!symbol || !shares || !price) return;
+  try {
+    const r = await api.post('/api/portfolio/fifo-preview', { symbol, shares, price });
+    if (r && r.realized_pnl != null) {
+      pnlEl.value = r.realized_pnl;
+      pnlEl.dataset.auto = '1';
+      pnlEl.title = r.sufficient_lots ? `FIFO vs blended cost $${r.blended_cost}` : 'Not enough open lots — review';
+    }
+  } catch (e) { /* ignore */ }
 }
 
 function openLogTradeFromSignal(symbol, signal, confidence) {
@@ -1522,7 +1770,7 @@ async function deleteTrade(id) {
   renderJournal();
 }
 
-function exportTradesCSV() { window.location.href = '/api/trades/export/csv'; }
+function exportTradesCSV() { downloadFile('/api/trades/export/csv', 'trades.csv'); }
 
 // ════════════════════════════════════════════════════════════════
 // TICKER DETAIL (tier + notes)
@@ -1534,6 +1782,7 @@ function openTickerDetail(sym) {
   document.getElementById('td-title').textContent = `${sym} — DETAILS`;
   document.querySelectorAll('[name="td-tier"]').forEach(r => { r.checked = r.value === item.tier; });
   document.getElementById('td-notes').value = item.notes || '';
+  document.getElementById('td-tags').value = (item.tags || []).join(', ');
   openModal('ticker-detail-modal');
 }
 
@@ -1541,9 +1790,10 @@ async function saveTierNotes() {
   const sym = document.getElementById('td-symbol').value;
   const tier = document.querySelector('[name="td-tier"]:checked')?.value || 'Active Watch';
   const notes = document.getElementById('td-notes').value;
-  await api.put(`/api/watchlist/${sym}`, { tier, notes });
+  const tags = document.getElementById('td-tags').value.split(',').map(s => s.trim()).filter(Boolean);
+  const updated = await api.put(`/api/watchlist/${sym}`, { tier, notes, tags });
   const item = S.watchlist.find(t => t.symbol === sym);
-  if (item) { item.tier = tier; item.notes = notes; }
+  if (item) { item.tier = tier; item.notes = notes; item.tags = updated.tags || tags; }
   closeModal('ticker-detail-modal');
   renderDashboard();
   showToast('Details saved.', 'success');
@@ -2385,7 +2635,7 @@ function sigGlyph(sig) { return sig === 'BUY' ? '▲' : sig === 'SELL' ? '▼' :
 // ════════════════════════════════════════════════════════════════
 // BACKUP / RESTORE
 // ════════════════════════════════════════════════════════════════
-function downloadBackup() { window.location.href = '/api/backup'; }
+function downloadBackup() { downloadFile('/api/backup', 'pg-stock-backup.json'); }
 
 function importBackup(input) {
   const file = input.files[0];

@@ -3,6 +3,9 @@ import re
 import csv
 import json
 import io
+import threading
+import time as _time
+import logging
 from datetime import datetime, date, timedelta
 
 import requests
@@ -11,13 +14,15 @@ from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
 
-from models import db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog, Preference, FMPCache
+from models import (db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog,
+                    Preference, FMPCache, QuoteCache, AlertEvent)
 from analysis import (
     analyze_ticker, compute_rsi, compute_rvol, rvol_tier,
     smooth_prices, detect_surge_crash, detect_regime,
     PRESETS, preset_to_profile, DISCLAIMER, DEFAULT_PROFILE,
 )
 from backtest import run_backtest
+from portfolio import fifo_preview, build_open_lots, blended_cost
 import ai
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
@@ -27,6 +32,22 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 CORS(app)
+
+# Structured stdout logging (Railway/Render capture stdout)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+app.logger.setLevel(logging.INFO)
+
+
+@app.after_request
+def _log_request(resp):
+    try:
+        app.logger.info("%s %s -> %s", request.method, request.path, resp.status_code)
+    except Exception:
+        pass
+    return resp
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -59,6 +80,8 @@ def _existing_columns(table_name: str) -> set:
 SCHEMA_MIGRATIONS = [
     # Phase 2: profiles created from a research preset remember which one.
     ("analysis_profiles", "preset_key", "VARCHAR(40)"),
+    # Phase 4: free-form tags on watchlist items.
+    ("watchlist", "tags", "VARCHAR(255)"),
 ]
 
 
@@ -615,65 +638,126 @@ def validate_ticker(ticker):
         return jsonify({"valid": False, "error": str(e)})
 
 
+def _quote_from_hist(symbol: str, hist: pd.DataFrame) -> dict:
+    """Build the quote payload for one symbol from its OHLCV history."""
+    closes = hist["Close"].astype(float)
+    volumes = hist["Volume"].astype(float)
+    current = float(closes.iloc[-1])
+    prev = float(closes.iloc[-2]) if len(closes) > 1 else current
+    change = current - prev
+    pct = (change / prev * 100) if prev else 0
+    ma20 = float(closes.tail(20).mean()) if len(closes) >= 20 else None
+    ma50 = float(closes.tail(50).mean()) if len(closes) >= 50 else None
+    rsi = compute_rsi(closes) if len(closes) >= 15 else None
+    vol = float(volumes.iloc[-1])
+    avg_vol20 = float(volumes.tail(20).mean()) if len(volumes) >= 20 else vol
+    vol_ratio = round(vol / avg_vol20, 2) if avg_vol20 > 0 else 1.0
+    rvol = round(compute_rvol(volumes), 2)
+    n = 10
+    mom_pct = round((current / float(closes.iloc[-n - 1]) - 1) * 100, 2) if len(closes) > n else None
+    return {
+        "symbol": symbol.upper(), "price": round(current, 2), "change": round(change, 2),
+        "pct_change": round(pct, 2), "volume": fmt_vol(int(vol)), "volume_raw": int(vol),
+        "vol_ratio": vol_ratio, "rvol": rvol, "rvol_tier": rvol_tier(rvol),
+        "ma20": round(ma20, 2) if ma20 else None, "ma50": round(ma50, 2) if ma50 else None,
+        "above_ma20": current > ma20 if ma20 else None,
+        "above_ma50": current > ma50 if ma50 else None,
+        "rsi": round(rsi, 1) if rsi else None, "momentum_pct": mom_pct,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def _batch_history(symbols: list, period: str = "65d") -> dict:
+    """
+    Fetch OHLCV for many symbols in ONE yfinance call. Returns {SYMBOL: DataFrame}.
+    Falls back to an empty dict on failure (callers then use cache).
+    """
+    out = {}
+    syms = [s.upper() for s in symbols]
+    if not syms:
+        return out
+    try:
+        df = yf.download(syms, period=period, interval="1d", group_by="ticker",
+                         auto_adjust=True, progress=False, threads=True)
+        if df is None or df.empty:
+            return out
+        if len(syms) == 1:
+            # single symbol → flat columns
+            sub = df.dropna(how="all")
+            if not sub.empty:
+                out[syms[0]] = sub
+        else:
+            for s in syms:
+                if s in df.columns.get_level_values(0):
+                    sub = df[s].dropna(how="all")
+                    if not sub.empty and "Close" in sub.columns:
+                        out[s] = sub
+    except Exception:
+        pass
+    return out
+
+
+def _quote_cache_get(symbol: str):
+    return QuoteCache.query.filter_by(symbol=symbol.upper()).first()
+
+
+def _quote_cache_put(symbol: str, payload: dict):
+    row = QuoteCache.query.filter_by(symbol=symbol.upper()).first()
+    data = json.dumps(payload)
+    if row:
+        row.payload, row.fetched_at = data, datetime.utcnow()
+    else:
+        db.session.add(QuoteCache(symbol=symbol.upper(), payload=data))
+    db.session.commit()
+
+
 @app.route("/api/quote", methods=["POST"])
 def get_quotes():
+    """
+    Cache-first, batch-fetch quotes. Serves cached quotes fresher than the
+    refresh interval, batch-fetches the rest in one yfinance call, and on a
+    Yahoo outage serves stale data (≤60 min) flagged with "stale": true.
+    """
     data = request.json or {}
-    tickers = data.get("tickers", [])
-    results = {}
+    tickers = [t.upper() for t in data.get("tickers", [])]
+    if not tickers:
+        return jsonify({})
 
-    for symbol in tickers:
-        try:
-            hist = fetch_history(symbol)
-            if hist is None:
-                results[symbol] = {"error": "No data", "symbol": symbol.upper()}
-                continue
+    try:
+        fresh_secs = int(get_pref("interval", "300"))
+    except (TypeError, ValueError):
+        fresh_secs = 300
+    fresh_secs = max(30, fresh_secs)
+    now = datetime.utcnow()
 
-            closes = hist["Close"].astype(float)
-            volumes = hist["Volume"].astype(float)
+    results, to_fetch = {}, []
+    for sym in tickers:
+        row = _quote_cache_get(sym)
+        if row and row.payload and (now - row.fetched_at).total_seconds() < fresh_secs:
+            results[sym] = json.loads(row.payload)
+        else:
+            to_fetch.append(sym)
 
-            current = float(closes.iloc[-1])
-            prev = float(closes.iloc[-2]) if len(closes) > 1 else current
-            change = current - prev
-            pct = (change / prev * 100) if prev else 0
-
-            ma20 = float(closes.tail(20).mean()) if len(closes) >= 20 else None
-            ma50 = float(closes.tail(50).mean()) if len(closes) >= 50 else None
-
-            rsi = compute_rsi(closes) if len(closes) >= 15 else None
-
-            vol = float(volumes.iloc[-1])
-            # 20-bar average — matches compute_rvol() baseline in analysis.py
-            avg_vol20 = float(volumes.tail(20).mean()) if len(volumes) >= 20 else vol
-            vol_ratio = round(vol / avg_vol20, 2) if avg_vol20 > 0 else 1.0
-
-            rvol = round(compute_rvol(volumes), 2)
-            rvol_label = rvol_tier(rvol)
-
-            n = 10
-            mom_pct = None
-            if len(closes) > n:
-                mom_pct = round((current / float(closes.iloc[-n - 1]) - 1) * 100, 2)
-
-            results[symbol.upper()] = {
-                "symbol":       symbol.upper(),
-                "price":        round(current, 2),
-                "change":       round(change, 2),
-                "pct_change":   round(pct, 2),
-                "volume":       fmt_vol(int(vol)),
-                "volume_raw":   int(vol),
-                "vol_ratio":    vol_ratio,
-                "rvol":         rvol,
-                "rvol_tier":    rvol_label,
-                "ma20":         round(ma20, 2) if ma20 else None,
-                "ma50":         round(ma50, 2) if ma50 else None,
-                "above_ma20":   current > ma20 if ma20 else None,
-                "above_ma50":   current > ma50 if ma50 else None,
-                "rsi":          round(rsi, 1) if rsi else None,
-                "momentum_pct": mom_pct,
-                "timestamp":    datetime.now().isoformat(),
-            }
-        except Exception as e:
-            results[symbol.upper()] = {"error": str(e), "symbol": symbol.upper()}
+    if to_fetch:
+        fetched = _batch_history(to_fetch, period="65d")
+        for sym in to_fetch:
+            hist = fetched.get(sym)
+            if hist is not None and not hist.empty:
+                try:
+                    q = _quote_from_hist(sym, hist)
+                    _quote_cache_put(sym, q)
+                    results[sym] = q
+                    continue
+                except Exception:
+                    pass
+            # Fetch miss → serve stale cache (≤60 min) with a flag, else error
+            row = _quote_cache_get(sym)
+            if row and row.payload and (now - row.fetched_at).total_seconds() <= 3600:
+                stale = json.loads(row.payload)
+                stale["stale"] = True
+                results[sym] = stale
+            else:
+                results[sym] = {"error": "No data", "symbol": sym, "stale": bool(row)}
 
     return jsonify(results)
 
@@ -714,6 +798,11 @@ def update_watchlist(symbol):
     for field in ("name", "tier", "notes", "alert_direction", "alert_price"):
         if field in d:
             setattr(item, field, d[field])
+    if "tags" in d:
+        tags = d["tags"]
+        if isinstance(tags, list):
+            tags = ",".join(str(t).strip() for t in tags if str(t).strip())
+        item.tags = (str(tags) or "")[:255]
     db.session.commit()
     return jsonify(item.to_dict())
 
@@ -724,6 +813,82 @@ def delete_watchlist(symbol):
     db.session.delete(item)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/watchlist/import", methods=["POST"])
+def import_watchlist():
+    """Bulk-add tickers from pasted text (comma/newline/space separated)."""
+    raw = str((request.json or {}).get("text", ""))
+    syms = [s for s in re.split(r"[\s,;]+", raw.upper()) if s and re.fullmatch(r"[A-Z0-9.\-]{1,12}", s)]
+    results = []
+    for sym in dict.fromkeys(syms):   # dedupe, keep order
+        if WatchlistItem.query.filter_by(symbol=sym).first():
+            results.append({"symbol": sym, "status": "exists"})
+            continue
+        ok, price = True, None
+        try:
+            price = yf.Ticker(sym).fast_info.last_price
+            ok = bool(price)
+        except Exception:
+            ok = False
+        if not ok:
+            results.append({"symbol": sym, "status": "invalid"})
+            continue
+        db.session.add(WatchlistItem(symbol=sym, name=sym))
+        results.append({"symbol": sym, "status": "added", "price": round(float(price), 2)})
+    db.session.commit()
+    return jsonify({"results": results,
+                    "added": sum(1 for r in results if r["status"] == "added")})
+
+
+@app.route("/api/portfolio/import", methods=["POST"])
+def import_portfolio():
+    """Bulk-add positions from CSV rows: symbol,shares,cost_basis[,date]."""
+    raw = str((request.json or {}).get("text", ""))
+    results = []
+    for ln in raw.splitlines():
+        ln = ln.strip()
+        if not ln or ln.lower().startswith("symbol"):
+            continue
+        parts = [p.strip() for p in ln.split(",")]
+        if len(parts) < 3:
+            results.append({"row": ln, "status": "bad format"})
+            continue
+        sym = parts[0].upper()
+        try:
+            shares = float(parts[1])
+            cost = float(parts[2])
+        except ValueError:
+            results.append({"row": ln, "status": "non-numeric shares/cost"})
+            continue
+        acq = None
+        if len(parts) >= 4 and parts[3]:
+            try:
+                acq = datetime.strptime(parts[3], "%Y-%m-%d").date()
+            except ValueError:
+                acq = None
+        db.session.add(PortfolioPosition(symbol=sym, shares=shares, cost_basis=cost, date_acquired=acq))
+        results.append({"symbol": sym, "status": "added", "shares": shares, "cost_basis": cost})
+    db.session.commit()
+    return jsonify({"results": results,
+                    "added": sum(1 for r in results if r["status"] == "added")})
+
+
+@app.route("/api/portfolio/export/csv")
+def export_portfolio_csv():
+    """Portfolio CSV export (matches the journal export)."""
+    positions = PortfolioPosition.query.order_by(PortfolioPosition.symbol).all()
+    if not positions:
+        return Response("No positions", mimetype="text/plain")
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["Symbol", "Shares", "CostBasis", "DateAcquired", "Notes"])
+    writer.writeheader()
+    for p in positions:
+        writer.writerow({"Symbol": p.symbol, "Shares": p.shares, "CostBasis": p.cost_basis,
+                         "DateAcquired": p.date_acquired.isoformat() if p.date_acquired else "",
+                         "Notes": p.notes or ""})
+    return Response(output.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=portfolio.csv"})
 
 
 # ─── Strategy Presets ─────────────────────────────────────────────────────────
@@ -873,6 +1038,35 @@ def create_profile_from_preset(key):
     db.session.add(profile)
     db.session.commit()
     return jsonify(profile.to_dict()), 201
+
+
+# ─── Compare Mode (Phase 4) ───────────────────────────────────────────────────
+@app.route("/api/compare", methods=["POST"])
+def compare_tickers():
+    """Normalized (%-change from start) closing-price series for up to 4 tickers."""
+    d = request.json or {}
+    tickers = [t.upper() for t in d.get("tickers", []) if t][:4]
+    rng = d.get("range", "1Y")
+    period = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y"}.get(rng, "1y")
+    if not tickers:
+        return jsonify({"dates": [], "series": {}})
+    data = _batch_history(tickers, period=period)
+    per, all_dates = {}, set()
+    for sym in tickers:
+        h = data.get(sym)
+        if h is None or h.empty:
+            continue
+        closes = h["Close"].astype(float)
+        base = float(closes.iloc[0]) or 1.0
+        pts = {}
+        for idx, val in closes.items():
+            dt = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+            pts[dt] = round((float(val) / base - 1) * 100, 2)
+        per[sym] = pts
+        all_dates.update(pts.keys())
+    dates = sorted(all_dates)
+    series = {s: [per[s].get(dt) for dt in dates] for s in per}
+    return jsonify({"dates": dates, "series": series})
 
 
 # ─── Chart Data ──────────────────────────────────────────────────────────────
@@ -1179,20 +1373,58 @@ def get_trades():
     return jsonify([t.to_dict() for t in trades])
 
 
+@app.route("/api/portfolio/fifo-preview", methods=["POST"])
+def fifo_preview_route():
+    """Compute FIFO realized P&L + blended cost for a prospective sell."""
+    d = request.json or {}
+    symbol = str(d.get("symbol", "")).upper()
+    try:
+        shares = float(d.get("shares", 0))
+        price = float(d.get("price", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "shares and price must be numbers"}), 400
+    prior = [t.to_dict() for t in TradeLog.query.filter_by(symbol=symbol).all()]
+    return jsonify(fifo_preview(prior, shares, price))
+
+
+@app.route("/api/portfolio/lots")
+def portfolio_lots():
+    """Per-symbol open lots from the trade log: open shares + blended cost basis."""
+    by_symbol = {}
+    for t in TradeLog.query.order_by(TradeLog.date).all():
+        by_symbol.setdefault(t.symbol, []).append(t.to_dict())
+    out = []
+    for sym, trades in by_symbol.items():
+        lots = build_open_lots(trades)
+        shares, cost = blended_cost(lots)
+        if shares > 1e-9:
+            out.append({"symbol": sym, "open_shares": shares, "blended_cost": cost,
+                        "lots": [{"shares": round(l[0], 4), "price": round(l[1], 4)} for l in lots]})
+    return jsonify(out)
+
+
 @app.route("/api/trades", methods=["POST"])
 def log_trade():
     d = request.json or {}
+    symbol = d.get("symbol", "").upper()
+    action = d.get("action", "Buy")
+    shares = float(d.get("shares", 0))
+    price = float(d.get("price", 0))
+    realized = d.get("realized_pnl")
+
+    # Auto-compute FIFO realized P&L on a closing trade when not supplied
+    if realized is None and str(action).lower() in ("sell", "cover"):
+        prior = [t.to_dict() for t in TradeLog.query.filter_by(symbol=symbol).all()]
+        realized = fifo_preview(prior, shares, price)["realized_pnl"]
+
     trade = TradeLog(
-        symbol=d.get("symbol", "").upper(),
-        action=d.get("action", "Buy"),
-        shares=float(d.get("shares", 0)),
-        price=float(d.get("price", 0)),
+        symbol=symbol, action=action, shares=shares, price=price,
         date=datetime.strptime(d["date"], "%Y-%m-%d").date() if d.get("date") else date.today(),
         notes=d.get("notes", ""),
         signal_triggered=d.get("signal_triggered", False),
         signal_type=d.get("signal_type"),
         signal_confidence=d.get("signal_confidence"),
-        realized_pnl=d.get("realized_pnl"),
+        realized_pnl=realized,
     )
     db.session.add(trade)
     db.session.commit()
@@ -1939,6 +2171,145 @@ def backtest():
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Server-side alert engine + webhook (Phase 4) ─────────────────────────────
+def _current_price(symbol: str):
+    """Latest price from the quote cache, else a single fetch. None on failure."""
+    row = _quote_cache_get(symbol)
+    if row and row.payload:
+        try:
+            p = json.loads(row.payload).get("price")
+            if p is not None:
+                return float(p)
+        except Exception:
+            pass
+    try:
+        hist = fetch_history(symbol, period="5d")
+        if hist is not None and not hist.empty:
+            return float(hist["Close"].astype(float).iloc[-1])
+    except Exception:
+        pass
+    return None
+
+
+def _fire_webhook(payload: dict):
+    url = get_pref("alert_webhook", "")
+    if not url:
+        return
+    try:
+        requests.post(url, json=payload, timeout=6)
+    except Exception as e:
+        app.logger.warning("alert webhook failed: %s", e)
+
+
+def check_alerts_once() -> int:
+    """
+    Check every watchlist alert against the current price. Records an AlertEvent
+    (and fires the webhook) when a threshold is crossed, deduped to once per
+    symbol+direction per hour so multiple gunicorn workers don't double-fire.
+    Returns the number of new events recorded.
+    """
+    fired = 0
+    items = [w for w in WatchlistItem.query.all() if w.alert_direction and w.alert_price]
+    for w in items:
+        price = _current_price(w.symbol)
+        if price is None:
+            continue
+        crossed = (w.alert_direction == "above" and price >= w.alert_price) or \
+                  (w.alert_direction == "below" and price <= w.alert_price)
+        if not crossed:
+            continue
+        cutoff = datetime.utcnow() - timedelta(hours=1)
+        recent = AlertEvent.query.filter(
+            AlertEvent.symbol == w.symbol,
+            AlertEvent.direction == w.alert_direction,
+            AlertEvent.created_at > cutoff,
+        ).first()
+        if recent:
+            continue
+        ev = AlertEvent(symbol=w.symbol, direction=w.alert_direction,
+                        threshold=w.alert_price, price=round(price, 2))
+        db.session.add(ev)
+        db.session.commit()
+        fired += 1
+        app.logger.info("alert fired: %s %s %.2f (price %.2f)",
+                        w.symbol, w.alert_direction, w.alert_price, price)
+        _fire_webhook({"symbol": w.symbol, "direction": w.alert_direction,
+                       "threshold": w.alert_price, "price": round(price, 2),
+                       "at": ev.created_at.isoformat()})
+    return fired
+
+
+_alert_thread_started = False
+
+
+def _alert_loop():
+    while True:
+        try:
+            interval = max(60, int(get_pref("interval", "300")))
+        except Exception:
+            interval = 300
+        _time.sleep(interval)
+        try:
+            with app.app_context():
+                check_alerts_once()
+        except Exception as e:
+            app.logger.warning("alert loop error: %s", e)
+
+
+def start_alert_engine():
+    global _alert_thread_started
+    if _alert_thread_started or os.environ.get("DISABLE_ALERT_ENGINE"):
+        return
+    _alert_thread_started = True
+    threading.Thread(target=_alert_loop, daemon=True, name="alert-engine").start()
+
+
+@app.route("/api/alerts/events")
+def alert_events():
+    """Unseen alert events for the bell icon (most recent first)."""
+    rows = AlertEvent.query.filter_by(seen=False).order_by(AlertEvent.created_at.desc()).limit(50).all()
+    return jsonify([e.to_dict() for e in rows])
+
+
+@app.route("/api/alerts/events/seen", methods=["POST"])
+def alert_events_seen():
+    AlertEvent.query.filter_by(seen=False).update({"seen": True})
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/alerts/check", methods=["POST"])
+def alert_check_now():
+    """Manually trigger an alert sweep (used by tests / a 'check now' button)."""
+    return jsonify({"fired": check_alerts_once()})
+
+
+# ─── Health endpoint (Phase 5) ────────────────────────────────────────────────
+APP_VERSION = "2.0"
+
+
+@app.route("/api/health")
+def health():
+    """Lightweight health probe for uptime monitors."""
+    db_ok = True
+    try:
+        db.session.execute(db.text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    # Age of the freshest cached quote (proxy for yfinance freshness)
+    yf_age = None
+    try:
+        newest = QuoteCache.query.order_by(QuoteCache.fetched_at.desc()).first()
+        if newest:
+            yf_age = round((datetime.utcnow() - newest.fetched_at).total_seconds())
+    except Exception:
+        pass
+    return jsonify({
+        "ok": db_ok, "db": db_ok, "yfinance_age_s": yf_age,
+        "version": APP_VERSION, "ai_enabled": ai.ai_enabled(),
+    })
+
+
 # ─── Claude Fable 5 intelligence layer (Phase 3) ──────────────────────────────
 def _earnings_within(symbol: str, days: int = 7):
     """Return the next earnings date string if it falls within `days`, else None."""
@@ -2073,6 +2444,11 @@ def ai_backtest_postmortem():
         return jsonify({"enabled": True, "error": "No backtest stats provided."}), 400
     text = ai.backtest_postmortem(stats, trades, force=bool(d.get("force", False)))
     return jsonify({"enabled": True, "explanation": text})
+
+
+# Start the background alert engine (runs under gunicorn import and dev run alike;
+# cross-worker dedup in check_alerts_once keeps multiple workers from double-firing).
+start_alert_engine()
 
 
 if __name__ == "__main__":

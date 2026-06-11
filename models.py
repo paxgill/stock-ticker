@@ -13,6 +13,7 @@ class WatchlistItem(db.Model):
     notes = db.Column(db.Text, default="")
     alert_direction = db.Column(db.String(10))
     alert_price = db.Column(db.Float)
+    tags = db.Column(db.String(255))   # comma-separated free-form tags
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -22,6 +23,7 @@ class WatchlistItem(db.Model):
             "name": self.name,
             "tier": self.tier,
             "notes": self.notes,
+            "tags": [t.strip() for t in (self.tags or "").split(",") if t.strip()],
             "alert_direction": self.alert_direction,
             "alert_price": self.alert_price,
             "created_at": self.created_at.isoformat(),
@@ -144,3 +146,37 @@ class FMPCache(db.Model):
         db.UniqueConstraint('symbol', 'endpoint', name='uix_fmp_symbol_endpoint'),
         db.Index('ix_fmp_symbol_endpoint', 'symbol', 'endpoint'),
     )
+
+
+class QuoteCache(db.Model):
+    """Last fetched quote payload per symbol — serves stale data on yfinance outage."""
+    __tablename__ = "quote_cache"
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(16), unique=True, nullable=False, index=True)
+    payload = db.Column(db.Text)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        import json
+        d = json.loads(self.payload) if self.payload else {}
+        d["_cached_at"] = self.fetched_at.isoformat() if self.fetched_at else None
+        return d
+
+
+class AlertEvent(db.Model):
+    """A recorded alert trigger (from the server-side alert engine or client)."""
+    __tablename__ = "alert_events"
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(16), nullable=False, index=True)
+    direction = db.Column(db.String(10))
+    threshold = db.Column(db.Float)
+    price = db.Column(db.Float)
+    seen = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "symbol": self.symbol, "direction": self.direction,
+            "threshold": self.threshold, "price": self.price, "seen": self.seen,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PG Stock Analysis</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#E8A33D">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -258,6 +261,8 @@
       <input type="text" id="dash-ticker-input" placeholder="Add ticker..." autocapitalize="characters" spellcheck="false" onkeydown="if(event.key==='Enter')dashAddTicker()">
       <button onclick="dashAddTicker()">+</button>
     </div>
+    <button class="btn-sm" onclick="openCsvImport('watchlist')" title="Bulk import tickers">Import</button>
+    <button class="btn-sm" onclick="openCompare()" title="Compare tickers">Compare</button>
     <div class="toolbar-center" id="toolbar-center"></div>
     <div class="toolbar-right">
       <span class="refresh-label">AUTO</span>
@@ -308,7 +313,11 @@
     <div id="portfolio-summary" class="portfolio-summary"></div>
     <div class="portfolio-toolbar">
       <h3>HOLDINGS</h3>
-      <button class="btn-primary" onclick="openAddPosition()">+ ADD POSITION</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-primary" onclick="openAddPosition()">Add position</button>
+        <button class="btn-sm" onclick="openCsvImport('portfolio')">Import CSV</button>
+        <button class="btn-sm" onclick="exportPortfolioCSV()">Export CSV</button>
+      </div>
     </div>
     <div id="portfolio-content" class="portfolio-content">
       <div class="loading-screen"><div class="loading-spinner"></div><div>Loading portfolio...</div></div>
@@ -817,13 +826,57 @@
         </div>
       </div>
       <div class="setting-group">
+        <label class="setting-label">TAGS <span class="optional">(comma separated)</span></label>
+        <input type="text" id="td-tags" class="number-input" style="width:100%" placeholder="e.g. core, tech, long-term">
+      </div>
+      <div class="setting-group">
         <label class="setting-label">NOTES</label>
         <textarea id="td-notes" class="notes-textarea" rows="3" placeholder="e.g. Waiting for earnings, dad's pick..."></textarea>
       </div>
       <div class="modal-footer">
-        <button class="btn-ghost" onclick="closeModal('ticker-detail-modal')">CANCEL</button>
-        <button class="btn-primary" onclick="saveTierNotes()">SAVE</button>
+        <button class="btn-ghost" onclick="closeModal('ticker-detail-modal')">Cancel</button>
+        <button class="btn-primary" onclick="saveTierNotes()">Save</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- CSV Import Modal -->
+<div id="csv-import-modal" class="modal-overlay" onclick="closeModalOverlay(event,'csv-import-modal')">
+  <div class="modal-box modal-box-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="csv-import-title">Import</div>
+      <button class="modal-close" onclick="closeModal('csv-import-modal')">✕</button>
+    </div>
+    <div class="settings-body">
+      <p class="muted" id="csv-import-hint" style="font-size:11px;margin-bottom:8px"></p>
+      <textarea id="csv-import-text" class="csv-import-area" placeholder=""></textarea>
+      <div id="csv-import-result" class="csv-import-result"></div>
+      <div class="modal-footer">
+        <button class="btn-ghost" onclick="closeModal('csv-import-modal')">Cancel</button>
+        <button class="btn-primary" id="csv-import-go" onclick="runCsvImport()">Import</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Compare Modal -->
+<div id="compare-modal" class="modal-overlay" onclick="closeModalOverlay(event,'compare-modal')">
+  <div class="modal-box modal-box-chart">
+    <div class="modal-header">
+      <div class="modal-title">Compare — normalized % change</div>
+      <button class="modal-close" onclick="closeModal('compare-modal')">✕</button>
+    </div>
+    <div class="settings-body">
+      <p class="muted" style="font-size:11px;margin-bottom:6px">Pick up to 4 tickers.</p>
+      <div id="compare-picker" class="compare-picker"></div>
+      <div class="compare-ranges" id="compare-ranges">
+        <button class="btn-sm" onclick="setCompareRange('1M')">1M</button>
+        <button class="btn-sm" onclick="setCompareRange('3M')">3M</button>
+        <button class="btn-sm" onclick="setCompareRange('6M')">6M</button>
+        <button class="btn-sm active" onclick="setCompareRange('1Y')">1Y</button>
+      </div>
+      <div id="compare-chart" class="bt-chart"></div>
     </div>
   </div>
 </div>
