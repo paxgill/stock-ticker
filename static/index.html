@@ -269,6 +269,12 @@
   <!-- ─ Tab: Dashboard ──────────────────────────────────────────────── -->
   <div id="tab-dashboard" class="tab-content active">
     <div id="market-summary-wrap"></div>
+    <div id="ai-query-bar" class="ai-query-bar" style="display:none">
+      <span class="ai-tag">✦ Ask Claude</span>
+      <input type="text" id="ai-query-input" class="ai-query-input" placeholder="e.g. which of my stocks are oversold in an uptrend?" onkeydown="if(event.key==='Enter')runWatchlistQuery()">
+      <button class="btn-sm" onclick="runWatchlistQuery()">Ask</button>
+    </div>
+    <div id="ai-query-result" class="ai-query-result" style="display:none"></div>
     <div id="dashboard-content" class="dashboard-content">
       <div class="loading-screen"><div class="loading-spinner"></div><div>Fetching market data...</div></div>
     </div>
@@ -497,9 +503,11 @@
       </div>
       <div class="journal-actions">
         <button class="btn-primary" onclick="openLogTrade()">+ LOG TRADE</button>
+        <button class="btn-sm" id="journal-ai-btn" style="display:none" onclick="runJournalReview()">✦ Review my trading</button>
         <button class="btn-sm" onclick="exportTradesCSV()">⬇ CSV</button>
       </div>
     </div>
+    <div id="journal-ai-review" class="journal-ai-review" style="display:none"></div>
     <div id="journal-chart-wrap" class="journal-chart-wrap">
       <canvas id="pnl-chart" height="80"></canvas>
     </div>

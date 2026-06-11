@@ -2349,3 +2349,32 @@ details[open] .optsig-params-summary::after { content: '▾'; }
 .rp-details p { font-size: 11px; color: var(--text2); line-height: 1.5; margin: 6px 0; }
 .rp-weights { font-size: 10px; }
 .based-on { color: var(--accent); }
+
+/* ═══════════════════════ Phase 3: Claude Fable AI layer ═══════════════════════ */
+.ai-tag { font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: 0.03em; white-space: nowrap; }
+.ai-attrib { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ai-regen {
+  background: none; border: 1px solid var(--border); color: var(--text3);
+  border-radius: 4px; padding: 2px 8px; font-size: 10px; cursor: pointer; font-family: inherit;
+}
+.ai-regen:hover { border-color: var(--accent); color: var(--accent); }
+.ai-block { background: var(--bg2); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 4px; padding: 10px 12px; }
+.ai-block p { font-size: 12px; line-height: 1.6; color: var(--text); margin: 0 0 8px; }
+.ai-block p:last-child { margin-bottom: 0; }
+.ai-loading { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text3); padding: 6px 0; }
+.ai-bullets { margin: 6px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--text2); }
+.ai-bullets li { margin-bottom: 4px; }
+
+/* Dashboard NL query bar */
+.ai-query-bar { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; }
+.ai-query-input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 7px 10px; font-family: inherit; font-size: 12px; }
+.ai-query-input:focus { border-color: var(--accent); outline: none; }
+.ai-query-result { margin: 0 0 12px; }
+.ai-match-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 8px 0; }
+.ai-match { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; cursor: pointer; transition: border-color .15s; }
+.ai-match:hover { border-color: var(--accent); }
+.ai-match-sym { font-weight: 700; color: var(--accent); font-size: 13px; }
+.ai-match-reason { font-size: 11px; color: var(--text2); margin-top: 2px; line-height: 1.4; }
+
+.journal-ai-review { margin: 10px 0; }
+.bt-ai-actions { margin: 4px 0 12px; }

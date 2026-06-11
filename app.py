@@ -18,6 +18,7 @@ from analysis import (
     PRESETS, preset_to_profile, DISCLAIMER, DEFAULT_PROFILE,
 )
 from backtest import run_backtest
+import ai
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
 # ─── App / DB Setup ──────────────────────────────────────────────────────────
@@ -431,6 +432,10 @@ def _fmp_cache_set(symbol: str, endpoint: str, data):
     else:
         db.session.add(FMPCache(symbol=symbol, endpoint=endpoint, data=json.dumps(data)))
     db.session.commit()
+
+
+# Let the AI layer reuse the existing cache table for response caching.
+ai.set_cache_backend(_fmp_cache_get, _fmp_cache_set)
 
 
 def _fmp_get(path: str, symbol: str, cache_key: str, params: dict = None):
@@ -1932,6 +1937,142 @@ def backtest():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Claude Fable 5 intelligence layer (Phase 3) ──────────────────────────────
+def _earnings_within(symbol: str, days: int = 7):
+    """Return the next earnings date string if it falls within `days`, else None."""
+    try:
+        e = _fetch_earnings_date(symbol)
+        if e:
+            d = date.fromisoformat(e)
+            if 0 <= (d - date.today()).days <= days:
+                return e
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/api/ai/status")
+def ai_status():
+    """Tell the frontend whether AI features should be shown."""
+    return jsonify({"enabled": ai.ai_enabled(), "model": ai.MODEL})
+
+
+@app.route("/api/ai/briefing")
+def ai_briefing():
+    """Morning briefing — replaces the template summary when a key is present."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    force = request.args.get("force") == "1"
+    if not force:
+        cached = _fmp_cache_get("__ai__", "briefing_resp", ttl_hours=0.5)
+        if cached:
+            return jsonify(cached)
+
+    profile = get_active_profile_dict()
+    watch = []
+    for item in WatchlistItem.query.limit(12).all():
+        try:
+            a = analyze_ticker(item.symbol, fetch_history(item.symbol, period="1y"), profile)
+            if not a:
+                continue
+            entry = {"symbol": item.symbol, "signal": a["signal"],
+                     "confidence": a["confidence"],
+                     "regime": (a.get("regime") or {}).get("label")}
+            earn = _earnings_within(item.symbol, 7)
+            if earn:
+                entry["earnings_in_7d"] = earn
+            watch.append(entry)
+        except Exception:
+            continue
+
+    payload = {"indices": fetch_index_data(), "watchlist": watch}
+    summary = ai.morning_briefing(payload, force=force)
+    if not summary:
+        return jsonify({"enabled": True, "summary": None})
+    resp = {"enabled": True, "summary": summary, "source": "claude",
+            "generated_at": datetime.now().isoformat()}
+    try:
+        _fmp_cache_set("__ai__", "briefing_resp", resp)
+    except Exception:
+        pass
+    return jsonify(resp)
+
+
+@app.route("/api/ai/signal-explanation/<symbol>")
+def ai_signal_explanation(symbol):
+    """Plain-English explanation of one ticker's current signal."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    force = request.args.get("force") == "1"
+    a = analyze_ticker(symbol.upper(), fetch_history(symbol, period="1y"), get_active_profile_dict())
+    if not a:
+        return jsonify({"enabled": True, "explanation": None})
+    text = ai.explain_signal(a, force=force)
+    return jsonify({"enabled": True, "explanation": text, "source": "claude" if text else None})
+
+
+@app.route("/api/ai/journal-review", methods=["POST"])
+def ai_journal_review():
+    """On-demand pattern review of the user's trade log."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    trades = [{
+        "symbol": t.symbol, "action": t.action, "date": t.date.isoformat() if t.date else None,
+        "shares": t.shares, "price": t.price, "realized_pnl": t.realized_pnl,
+        "signal_triggered": t.signal_triggered, "signal_type": t.signal_type,
+    } for t in TradeLog.query.order_by(TradeLog.date).all()]
+    if not trades:
+        return jsonify({"enabled": True, "result": None, "message": "No trades to review yet."})
+    force = (request.json or {}).get("force", False)
+    result = ai.journal_review(trades, force=bool(force))
+    return jsonify({"enabled": True, "result": result})
+
+
+@app.route("/api/ai/watchlist-query", methods=["POST"])
+def ai_watchlist_query():
+    """Answer a natural-language question over the user's watchlist analysis."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    query = str((request.json or {}).get("query", "")).strip()
+    if not query:
+        return jsonify({"enabled": True, "error": "Empty query."}), 400
+
+    profile = get_active_profile_dict()
+    candidates = []
+    for item in WatchlistItem.query.limit(30).all():
+        try:
+            a = analyze_ticker(item.symbol, fetch_history(item.symbol, period="1y"), profile)
+            if not a:
+                continue
+            rsi = next((s.get("rsi") for s in a.get("signals", []) if s.get("name") == "RSI"), None)
+            candidates.append({
+                "symbol": item.symbol, "signal": a["signal"], "confidence": a["confidence"],
+                "regime": (a.get("regime") or {}).get("label"),
+                "trend": (a.get("regime") or {}).get("direction"),
+                "rsi": rsi, "weighted_score": a.get("weighted_score"),
+            })
+        except Exception:
+            continue
+    if not candidates:
+        return jsonify({"enabled": True, "result": {"matches": []}})
+    result = ai.watchlist_query(query, candidates)
+    return jsonify({"enabled": True, "result": result})
+
+
+@app.route("/api/ai/backtest-postmortem", methods=["POST"])
+def ai_backtest_postmortem():
+    """Explain a backtest the user just ran (stats + trades posted from the client)."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    d = request.json or {}
+    stats = d.get("stats")
+    trades = d.get("trades", [])
+    if not stats:
+        return jsonify({"enabled": True, "error": "No backtest stats provided."}), 400
+    text = ai.backtest_postmortem(stats, trades, force=bool(d.get("force", False)))
+    return jsonify({"enabled": True, "explanation": text})
 
 
 if __name__ == "__main__":
