@@ -2763,8 +2763,16 @@ try {
     sigRow.layoutHorizontally();
     const sigIcon = topSignal.signal === "BUY" ? "▲" : topSignal.signal === "SELL" ? "▼" : "■";
     const sigText = sigRow.addText(sigIcon + " " + topSignal.symbol + " " + topSignal.signal + " " + topSignal.confidence + "%");
-    sigText.textColor = topSignal.signal === "BUY" ? new Color("#00e676") : new Color("#ff5252");
+    sigText.textColor = topSignal.signal === "BUY" ? new Color("#2fbf71") : new Color("#e5484d");
     sigText.font = Font.mediumMonospacedSystemFont(9);
+    // Regime badge on the top-signal line (Phase 5 parity)
+    const regime = topSignal.regime && topSignal.regime.label;
+    if (regime && regime !== "Undetermined") {
+      sigRow.addSpacer(6);
+      const regText = sigRow.addText(regime);
+      regText.textColor = new Color("#9aa3b0");
+      regText.font = Font.regularMonospacedSystemFont(8);
+    }
     widget.addSpacer(4);
   }
 
