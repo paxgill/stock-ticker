@@ -19,11 +19,7 @@ from datetime import date
 
 import pandas as pd
 
-from analysis import analyze_ticker, DISCLAIMER
-
-# Bound each per-day analyze call so the backtest stays O(n): a trailing window
-# big enough for MA200 (200) and 12-1 momentum (253) plus a little headroom.
-_LOOKBACK = 256
+from analysis import replay_signals, DISCLAIMER
 
 
 def _parse_date(s, default):
@@ -64,6 +60,10 @@ def run_backtest(symbol: str, hist: pd.DataFrame, profile: dict,
     first_idx = next(i for i in range(n) if in_window[i])
     cost = max(0.0, cost_bps) / 10_000.0
 
+    # Route every per-day signal through the shared point-in-time primitive.
+    records = replay_signals(symbol, hist, profile, since=d0)
+    by_idx = {r["bar_index"]: r for r in records}
+
     # ── Simulate ──────────────────────────────────────────────────────────────
     trades = []
     entry = None
@@ -73,8 +73,8 @@ def run_backtest(symbol: str, hist: pd.DataFrame, profile: dict,
             i += 1
             continue
 
-        sub = hist.iloc[max(0, i - _LOOKBACK + 1): i + 1]
-        res = analyze_ticker(symbol, sub, profile)
+        rec = by_idx.get(i)
+        res = rec["analysis"] if rec else None
         sig = res["signal"] if res else "HOLD"
         stop_price = res["suggested_stop"]["price"] if (res and res.get("suggested_stop")) else None
 

@@ -10,6 +10,8 @@ research. The same disclaimer (DISCLAIMER) is surfaced in the UI.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pandas as pd
 
@@ -494,6 +496,85 @@ def analyze_ticker(symbol: str, hist: pd.DataFrame, profile: dict) -> dict | Non
         "position_sizing": sizing,
         "disclaimer":     DISCLAIMER,
     }
+
+
+# ─── Shared point-in-time primitive (Phase 6) ─────────────────────────────────
+# Bounded trailing window — big enough for MA200 (200) and 12-1 momentum (253)
+# plus headroom. Identical to the backtester's window so results match exactly.
+_REPLAY_LOOKBACK = 256
+
+
+def _bar_date(idx_val):
+    return idx_val.date() if hasattr(idx_val, "date") else idx_val
+
+
+def replay_signals(symbol: str, history: pd.DataFrame, profile: dict,
+                   as_of=None, since=None) -> list:
+    """
+    The single point-in-time signal engine. For each trading day (or only the day
+    of `as_of` when given), returns the analysis the engine WOULD have produced
+    using ONLY bars with date <= that day. The backtester, scoreboard backfill,
+    live snapshotter, and time machine all call this — one code path, so lookahead
+    bias can hide in exactly one place (and is proven absent by the lookahead test).
+
+    `history` must be a DatetimeIndex DataFrame of SPLIT/DIVIDEND-ADJUSTED OHLCV
+    used for all math. If it carries a 'CloseRaw' column, the as-traded close is
+    surfaced for display (never used in math).
+
+    Each record:
+      snapshot_date, bar_index, n_bars, had_ma200,
+      price_close_adj, price_close_raw, price_next_open_adj,
+      signal, confidence, signed_score, regime, analysis (full dict or None)
+    Records whose engine output is None (insufficient bars) are still returned for
+    the single-`as_of` case (so availability can be reported); the multi-day scan
+    skips them.
+    """
+    if history is None or history.empty:
+        return []
+    hist = history.dropna(subset=["Close"])
+    if hist.empty:
+        return []
+    n = len(hist)
+    dates = list(hist.index)
+    has_raw = "CloseRaw" in hist.columns
+    closes_adj = hist["Close"].astype(float).tolist()
+    closes_raw = hist["CloseRaw"].astype(float).tolist() if has_raw else None
+    opens_adj = hist["Open"].astype(float).tolist() if "Open" in hist.columns else None
+
+    if as_of is not None:
+        target = date.fromisoformat(str(as_of)[:10]) if not isinstance(as_of, date) else as_of
+        idxs = [i for i in range(n) if _bar_date(dates[i]) <= target]
+        if not idxs:
+            return []                      # entirely before this symbol's history
+        indices = [idxs[-1]]
+    else:
+        since_d = None
+        if since is not None:
+            since_d = date.fromisoformat(str(since)[:10]) if not isinstance(since, date) else since
+        indices = [i for i in range(n) if since_d is None or _bar_date(dates[i]) >= since_d]
+
+    records = []
+    single = as_of is not None
+    for i in indices:
+        sub = hist.iloc[max(0, i - _REPLAY_LOOKBACK + 1): i + 1]
+        res = analyze_ticker(symbol, sub, profile)   # point-in-time: bars <= day i only
+        if res is None and not single:
+            continue
+        records.append({
+            "snapshot_date": str(_bar_date(dates[i])),
+            "bar_index": i,
+            "n_bars": len(sub),
+            "had_ma200": len(sub) >= 200,
+            "price_close_adj": round(closes_adj[i], 4),
+            "price_close_raw": round(closes_raw[i], 4) if closes_raw else None,
+            "price_next_open_adj": round(opens_adj[i + 1], 4) if (opens_adj and i + 1 < n) else None,
+            "signal": res["signal"] if res else None,
+            "confidence": res["confidence"] if res else None,
+            "signed_score": res["weighted_score"] if res else None,
+            "regime": (res.get("regime") or {}).get("label") if res else None,
+            "analysis": res,
+        })
+    return records
 
 
 def detect_surge_crash(

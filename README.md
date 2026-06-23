@@ -121,6 +121,47 @@ The **backtester** (`backtest.py`) replays `analyze_ticker` on an expanding wind
 next-open execution and the ATR stop, then reports equity vs buy-and-hold and the usual
 stats. Results are hypothetical and never persisted or ranked.
 
+## Signal Scoreboard & Time Machine
+
+Two features that share **one point-in-time engine** (`analysis.replay_signals`) —
+the same primitive the backtester uses — so a signal can only ever be computed
+from bars dated on or before the day in question. A loud test proves a
+reconstruction at date *t* is byte-identical whether or not future bars exist in
+the input.
+
+**Information Coefficient (IC)** is the headline metric: the rank correlation
+between the engine's continuous signed score and the realized forward return.
+Read it as: **> 0.05 = meaningful predictive power, ≈ 0 = noise, < −0.05 =
+contrarian** (doing the opposite would have helped). The watchlist number is the
+*cross-sectional* rank IC averaged over dates with ≥5 names; per-ticker it's the
+time-series IC. Every metric shows its sample size `n`, and `n < 20` is flagged
+"noisy" — never hidden.
+
+**Backfill vs. live.** "Backfill" instantly replays the last N months of
+point-in-time signals so the scoreboard is useful on day one; "live" snapshots
+are written once per trading day after the close by the existing daemon thread
+and carry zero hindsight risk (they're marked distinctly).
+
+**Honesty caveats (shown in-app, repeated here):**
+- *Lookahead:* signals are reconstructed strictly from prior bars; this is tested.
+- *Survivorship:* your watchlist is names you chose and kept — a flattering sample.
+- *Split-adjusted prices:* all math uses split/dividend-adjusted prices (so
+  RSI/returns stay continuous). Displayed historical prices are labeled
+  "split-adjusted," and when a corporate action sits between the shown date and
+  today, the as-traded price and a note are surfaced so the number matches memory.
+- *Execution lag:* next-open ("no") returns are shown beside close-to-close so you
+  see how much "edge" is timing fantasy.
+- *Anecdote vs. evidence:* the Time Machine shows one rewound date (a story) plus
+  2–3 other dates; the IC across all dates is the evidence. The UI says so.
+- **Nothing auto-tunes the engine.** The scoreboard reports; it never optimizes
+  profile weights to past IC (that would be overfitting).
+
+The **Time Machine** (rewind icon on any signal card, or the scoreboard drawer)
+reconstructs the full signal panel as of any past date — visually identical to a
+live card — and shows the realized outcome at 1/5/10/20 days and "to today" beside
+it. Dates lacking enough history (e.g. MA200 needs 200 trading days) are disabled
+or flagged, never fabricated.
+
 ## Tests
 
 ```bash
@@ -130,6 +171,7 @@ python tests/test_backtest.py     # walk-forward correctness + perf budget
 python tests/test_portfolio.py    # FIFO math + product endpoints
 python tests/test_ai.py           # AI layer graceful degradation
 python tests/test_routes.py       # API smoke tests
+python tests/test_scoreboard.py   # lookahead guard, IC, forward returns, time-machine
 ```
 
 Each script asserts its expectations and exits non-zero on failure, so they drop

@@ -24,6 +24,7 @@ const S = {
   activeTagFilter: null,
   alertEvents: [],
   lastQuoteRefresh: null,
+  scoreboard: { data: null, horizon: 20, benchmark: 'spy' },
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -56,6 +57,7 @@ const _ICON_PATHS = {
   bolt:     '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   search:   '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   note:     '<path d="M5 3h11l3 3v15H5z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+  rewind:   '<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l3 2"/>',
 };
 function svgIcon(name, size = 15) {
   const p = _ICON_PATHS[name] || '';
@@ -157,13 +159,13 @@ function registerServiceWorker() {
 }
 
 // ── Keyboard shortcuts (1–8 tabs, r refresh, a add, t theme, ? help) ──
-const _TAB_ORDER = ['dashboard','signals','heatmap','correlation','portfolio','journal','backtest','optsig'];
+const _TAB_ORDER = ['dashboard','signals','heatmap','correlation','portfolio','journal','backtest','scoreboard','optsig'];
 function initKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey) return;
     if (document.getElementById('onboarding').classList.contains('active')) return;
-    if (e.key >= '1' && e.key <= '8') {
+    if (e.key >= '1' && e.key <= '9') {
       const name = _TAB_ORDER[parseInt(e.key) - 1];
       const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
       if (btn) { switchTab(name, btn); }
@@ -184,7 +186,7 @@ function openShortcutsHelp() {
         <button class="modal-close" onclick="document.getElementById('shortcuts-modal').classList.remove('open')">✕</button></div>
       <div class="settings-body">
         <table class="shortcuts-table">
-          <tr><td><kbd>1</kbd>–<kbd>8</kbd></td><td>Switch tabs</td></tr>
+          <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Switch tabs</td></tr>
           <tr><td><kbd>r</kbd></td><td>Refresh quotes</td></tr>
           <tr><td><kbd>a</kbd></td><td>Focus add-ticker</td></tr>
           <tr><td><kbd>t</kbd></td><td>Toggle theme</td></tr>
@@ -917,6 +919,7 @@ function switchTab(name, btn) {
   if (name === 'portfolio')   { loadPortfolio().then(renderPortfolio); }
   if (name === 'journal')     { loadTrades().then(renderJournal); }
   if (name === 'backtest')    renderBacktestTab();
+  if (name === 'scoreboard')  renderScoreboardTab();
   if (name === 'optsig')      renderOptSigTab();
 }
 
@@ -994,6 +997,7 @@ function renderSignalsContent() {
           <div class="tier-info">Risk: ${esc(s.risk_tolerance || '—')}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="log-trade-btn" onclick="event.stopPropagation();openSignalDetail('${s.symbol}')">Why this score?</button>
+            <button class="log-trade-btn" onclick="event.stopPropagation();openTickerDrawer('${s.symbol}')" title="Rewind — what did this signal say in the past?">${svgIcon('rewind', 12)} Rewind</button>
             <button class="log-trade-btn" onclick="event.stopPropagation();openChart('${s.symbol}')">${svgIcon('chart', 12)} Chart</button>
             <button class="log-trade-btn" onclick="event.stopPropagation();openLogTradeFromSignal('${s.symbol}', '${s.signal}', ${s.confidence})">
               ${s.signal === 'BUY' ? '+ Log Buy' : s.signal === 'SELL' ? '+ Log Sell' : '+ Log Trade'}
@@ -1403,6 +1407,329 @@ async function runBacktestPostmortem(force) {
   } catch (e) {
     slot.innerHTML = `<p class="muted">Could not reach the AI service.</p>`;
   }
+}
+
+// ════════════════════════════════════════════════════════════════
+// SIGNAL SCOREBOARD + TIME MACHINE (Phase 6)
+// ════════════════════════════════════════════════════════════════
+const _IC_LEGEND = 'Rank IC > 0.05 = meaningful predictive power · ≈ 0 = noise · < −0.05 = contrarian';
+const _H_LABEL = { 1: '1d', 5: '1w', 10: '2w', 20: '1m' };
+
+function _fmtPct(v, withSign = true) {
+  if (v == null) return '—';
+  const p = v * 100;
+  return `${withSign && p >= 0 ? '+' : ''}${p.toFixed(1)}%`;
+}
+function _icWord(interp) { return interp || '—'; }
+
+async function renderScoreboardTab() {
+  const el = document.getElementById('scoreboard-content');
+  el.innerHTML = `<div class="loading-screen"><div class="loading-spinner"></div><div>Loading scoreboard…</div></div>`;
+  const sb = S.scoreboard;
+  try {
+    const data = await api.get(`/api/scoreboard?horizon=${sb.horizon}&benchmark=${sb.benchmark}`);
+    sb.data = data;
+    if (data.empty) { renderScoreboardEmpty(el); return; }
+    renderScoreboardFull(el, data);
+  } catch (e) {
+    el.innerHTML = `<div class="no-profile-msg">Failed to load the scoreboard.</div>`;
+  }
+}
+
+function renderScoreboardEmpty(el) {
+  el.innerHTML = `
+    <div class="empty-state sb-empty">
+      <h3>No signal history yet</h3>
+      <p>Backfill 6 months to see how your watchlist's signals have actually performed —
+         forward returns, hit rate, and the Information Coefficient.</p>
+      <button class="btn-primary" id="sb-backfill-btn" onclick="runBackfill()">Backfill 6 months</button>
+      <div id="sb-backfill-progress" class="sb-progress"></div>
+    </div>`;
+}
+
+async function runBackfill() {
+  const btn = document.getElementById('sb-backfill-btn');
+  const prog = document.getElementById('sb-backfill-progress');
+  if (btn) { btn.disabled = true; btn.textContent = 'Backfilling…'; }
+  if (prog) prog.innerHTML = `<div class="sb-progress-bar"><div class="sb-progress-fill" style="width:30%"></div></div><span class="muted">Replaying signals over 6 months…</span>`;
+  try {
+    const r = await api.post('/api/scoreboard/backfill', { lookback_days: 180 });
+    if (prog) prog.innerHTML = `<div class="sb-progress-bar"><div class="sb-progress-fill" style="width:100%"></div></div><span class="muted">Created ${r.created} snapshots across ${r.symbols.length} tickers.</span>`;
+    setTimeout(renderScoreboardTab, 700);
+  } catch (e) {
+    if (prog) prog.innerHTML = `<span class="muted">Backfill failed: ${esc(e.message || '')}</span>`;
+    if (btn) { btn.disabled = false; btn.textContent = 'Backfill 6 months'; }
+  }
+}
+
+function setScoreboardHorizon(h) { S.scoreboard.horizon = h; renderScoreboardTab(); }
+function toggleScoreboardBenchmark() {
+  S.scoreboard.benchmark = S.scoreboard.benchmark === 'spy' ? 'none' : 'spy';
+  renderScoreboardTab();
+}
+
+function renderScoreboardFull(el, data) {
+  const H = data.horizon;
+  const xs = (data.cross_sectional_ic || {})[H] || {};
+  const icVal = xs.ic == null ? '—' : xs.ic.toFixed(3);
+  const icClass = xs.low_sample ? 'sb-lowsample' : '';
+
+  const horizonBtns = [1, 5, 10, 20].map(h =>
+    `<button class="btn-sm ${h === H ? 'active' : ''}" onclick="setScoreboardHorizon(${h})">${_H_LABEL[h]}</button>`).join('');
+
+  // Per-ticker rows
+  const rows = (data.per_ticker || []).map(p => {
+    if (p.no_data) return `<tr class="sb-lowsample"><td>${esc(p.symbol)}</td><td colspan="6" class="muted">no snapshots</td></tr>`;
+    const ic = p.rank_ic || {};
+    const fwd = (p.fwd || {})[H] || {};
+    const lowCls = p.low_sample ? 'sb-lowsample' : '';
+    const sig = p.latest ? p.latest.signal : '—';
+    const sigCls = sig === 'BUY' ? 'sug-buy' : sig === 'SELL' ? 'sug-sell' : 'sug-hold';
+    return `
+      <tr class="${lowCls}" onclick="openTickerDrawer('${esc(p.symbol)}')" style="cursor:pointer">
+        <td><strong>${esc(p.symbol)}</strong> ${p.low_sample ? '<span class="sb-noisy">noisy</span>' : ''}</td>
+        <td><span class="suggestion-badge ${sigCls}">${sigGlyph(sig)} ${sig}</span></td>
+        <td class="sb-ic">${ic.ic == null ? '—' : ic.ic.toFixed(3)} <span class="muted">n=${ic.n ?? 0}</span></td>
+        <td>${p.hit_abs && p.hit_abs.rate != null ? p.hit_abs.rate + '%' : '—'} <span class="muted">n=${p.hit_abs ? p.hit_abs.n : 0}</span></td>
+        <td>${data.benchmark === 'spy' && p.hit_rel && p.hit_rel.rate != null ? p.hit_rel.rate + '%' : '—'}</td>
+        <td class="${fwd.cc >= 0 ? 'up' : 'down'}">${_fmtPct(fwd.cc)} <span class="muted">/ ${_fmtPct(fwd.no)} no</span></td>
+        <td>${sparklineSvg(p.sparkline)}</td>
+      </tr>`;
+  }).join('');
+
+  // Aggregate panels
+  const typeRows = ['BUY', 'SELL', 'HOLD'].map(t => {
+    const r = (data.by_type || {})[t];
+    return `<tr><td>${t}</td><td class="${r && r.avg_ret >= 0 ? 'up' : 'down'}">${r ? _fmtPct(r.avg_ret) : '—'}</td><td class="muted">n=${r ? r.n : 0}</td></tr>`;
+  }).join('');
+  const regimeRows = Object.entries(data.by_regime || {}).map(([reg, r]) =>
+    `<tr><td>${esc(reg)}</td><td>${r.hit && r.hit.rate != null ? r.hit.rate + '%' : '—'} <span class="muted">n=${r.hit ? r.hit.n : 0}</span></td><td class="${r.avg_ret >= 0 ? 'up' : 'down'}">${_fmtPct(r.avg_ret)}</td></tr>`).join('');
+
+  const aiBtn = S.aiEnabled
+    ? `<button class="btn-sm" onclick="runScoreboardPostmortem(false)">✦ Explain my signal accuracy</button><div id="sb-postmortem"></div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="sb-header">
+      <div class="sb-ic-hero ${icClass}">
+        <div class="sb-ic-label">Watchlist cross-sectional Rank IC · ${_H_LABEL[H]}</div>
+        <div class="sb-ic-number">${icVal}</div>
+        <div class="sb-ic-interp">${_icWord(xs.interpretation)} · ${xs.n_dates || 0} dates${xs.low_sample ? ' · low sample, noisy' : ''}</div>
+      </div>
+      <div class="sb-controls">
+        <div class="sb-horizon">${horizonBtns}</div>
+        <button class="btn-sm ${data.benchmark === 'spy' ? 'active' : ''}" onclick="toggleScoreboardBenchmark()">vs SPY</button>
+        <button class="btn-sm" onclick="runBackfill()" title="Re-backfill (idempotent)">↺ Backfill</button>
+      </div>
+    </div>
+    <div class="sb-legend muted">${_IC_LEGEND}</div>
+    <div class="sb-banner">
+      Measures past signal behavior on a self-curated, survivorship-flattered watchlist.
+      Small samples are noisy (n shown everywhere). Next-open returns ("no") are the realistic ones.
+      Nothing here predicts the future, auto-tunes the engine, or is financial advice.
+    </div>
+    ${aiBtn}
+    <div class="sb-table-wrap">
+      <table class="sb-table">
+        <thead><tr><th>Ticker</th><th>Signal</th><th>Rank IC</th><th>Hit %</th><th>vs SPY</th><th>Avg ${_H_LABEL[H]} return</th><th>Signal vs price</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="sb-aggregates">
+      <div class="sb-agg-card">
+        <div class="sd-section-title">Average forward return by signal (${_H_LABEL[H]})</div>
+        <table class="sb-mini"><thead><tr><th>Signal</th><th>Avg return</th><th></th></tr></thead><tbody>${typeRows}</tbody></table>
+        <div class="muted" style="font-size:10px;margin-top:4px">Overall hit rate ${data.overall_hit_abs && data.overall_hit_abs.rate != null ? data.overall_hit_abs.rate + '%' : '—'} (n=${data.overall_hit_abs ? data.overall_hit_abs.n : 0})</div>
+      </div>
+      <div class="sb-agg-card">
+        <div class="sd-section-title">Accuracy by regime</div>
+        <table class="sb-mini"><thead><tr><th>Regime</th><th>Hit %</th><th>Avg return</th></tr></thead><tbody>${regimeRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table>
+      </div>
+    </div>
+    <div class="sd-disclaimer">${esc(data.disclaimer || '')} ${esc(data.survivorship_note || '')}</div>`;
+}
+
+// Compact signal-vs-price sparkline (price line + BUY/SELL markers)
+function sparklineSvg(points) {
+  if (!points || points.length < 2) return '<span class="muted">—</span>';
+  const w = 120, h = 28, pad = 2;
+  const prices = points.map(p => p.price).filter(v => v != null);
+  if (prices.length < 2) return '<span class="muted">—</span>';
+  const min = Math.min(...prices), max = Math.max(...prices), range = (max - min) || 1;
+  const x = i => pad + (i / (points.length - 1)) * (w - 2 * pad);
+  const y = v => h - pad - ((v - min) / range) * (h - 2 * pad);
+  const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.price).toFixed(1)}`).join(' ');
+  const markers = points.map((p, i) => {
+    if (p.signal === 'BUY') return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.price).toFixed(1)}" r="2.2" fill="var(--green)"/>`;
+    if (p.signal === 'SELL') return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.price).toFixed(1)}" r="2.2" fill="var(--red)"/>`;
+    return '';
+  }).join('');
+  return `<svg class="sb-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="${path}" fill="none" stroke="var(--text3)" stroke-width="1"/>${markers}</svg>`;
+}
+
+async function runScoreboardPostmortem(force) {
+  const slot = document.getElementById('sb-postmortem');
+  if (!slot || !S.scoreboard.data) return;
+  const d = S.scoreboard.data;
+  const stats = { cross_sectional_ic: d.cross_sectional_ic, by_type: d.by_type, by_regime: d.by_regime,
+                  overall_hit_abs: d.overall_hit_abs, overall_hit_rel: d.overall_hit_rel, horizon: d.horizon };
+  slot.innerHTML = `<div class="ai-loading"><span class="loading-spinner" style="width:12px;height:12px;border-width:1px"></span> Claude is reading your accuracy…</div>`;
+  try {
+    const r = await api.post('/api/ai/scoreboard-postmortem', { stats, force: !!force });
+    if (!r.enabled || !r.explanation) { slot.innerHTML = ''; return; }
+    slot.innerHTML = `<div class="ai-block"><p>${aiText(r.explanation)}</p></div>${aiAttribution('runScoreboardPostmortem(true)')}`;
+  } catch (e) { slot.innerHTML = `<p class="muted">Could not reach the AI service.</p>`; }
+}
+
+// ── Detail drawer (timeline + Time Machine) ──
+let _tmSymbol = null, _tmTimeline = [];
+async function openTickerDrawer(symbol) {
+  _tmSymbol = symbol;
+  document.getElementById('sb-drawer-title').textContent = `${symbol} — signal history`;
+  const body = document.getElementById('sb-drawer-body');
+  body.innerHTML = `<div class="loading-screen"><div class="loading-spinner"></div><div>Loading…</div></div>`;
+  openModal('sb-drawer');
+  try {
+    const r = await api.get(`/api/scoreboard/${encodeURIComponent(symbol)}`);
+    _tmTimeline = r.timeline || [];
+    renderTickerDrawer(symbol, _tmTimeline);
+  } catch (e) { body.innerHTML = `<div class="no-profile-msg">Failed to load history.</div>`; }
+}
+
+function renderTickerDrawer(symbol, timeline) {
+  const body = document.getElementById('sb-drawer-body');
+  // As-of presets gated by available history
+  const dates = timeline.map(t => t.snapshot_date);
+  const earliest = dates[0];
+  const presets = [['1w', 7], ['1m', 30], ['3m', 90], ['6m', 180], ['1y', 365]];
+  const today = new Date();
+  const presetBtns = presets.map(([lbl, days]) => {
+    const d = new Date(today); d.setDate(d.getDate() - days);
+    const iso = d.toISOString().slice(0, 10);
+    const tooEarly = earliest && iso < earliest;
+    return `<button class="btn-sm ${tooEarly ? '' : ''}" ${tooEarly ? 'disabled title="Not enough history before this date"' : ''} onclick="runTimeMachine('${symbol}','${iso}')">${lbl} ago</button>`;
+  }).join('');
+
+  const rows = timeline.slice(-40).reverse().map(t => {
+    const sigCls = t.signal === 'BUY' ? 'sug-buy' : t.signal === 'SELL' ? 'sug-sell' : 'sug-hold';
+    const r20 = t.ret_20d;
+    const pending = t.matured_through < 20;
+    return `<tr onclick="runTimeMachine('${symbol}','${t.snapshot_date}')" style="cursor:pointer">
+      <td>${t.snapshot_date}</td>
+      <td><span class="suggestion-badge ${sigCls}">${sigGlyph(t.signal)} ${t.signal} ${t.confidence ?? ''}</span></td>
+      <td class="mono">$${t.price_close_adj != null ? t.price_close_adj.toFixed(2) : '—'}</td>
+      <td class="${(r20 || 0) >= 0 ? 'up' : 'down'}">${pending ? '<span class="muted">pending</span>' : _fmtPct(r20)}</td>
+      <td><span class="sb-src sb-src-${t.source}">${t.source}</span></td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="tm-controls">
+      <span class="earnings-strip-label">Rewind to:</span>
+      ${presetBtns}
+      <input type="date" id="tm-date" class="bt-input" min="${earliest || ''}" onchange="runTimeMachine('${symbol}', this.value)">
+    </div>
+    <div id="tm-result"></div>
+    <div class="sb-anecdote">One date is a single example and easy to cherry-pick. For whether these signals
+      actually work, see the Information Coefficient across all dates on the scoreboard.</div>
+    <div class="sd-section-title" style="margin-top:14px">Snapshot timeline</div>
+    <div class="bt-table-wrap"><table class="bt-table">
+      <thead><tr><th>Date</th><th>Signal</th><th>Price (adj)</th><th>20d return</th><th>Source</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5" class="muted">No snapshots — backfill first.</td></tr>'}</tbody>
+    </table></div>`;
+
+  // Auto-load the most recent ~1-month-ago reconstruction
+  if (timeline.length) {
+    const d = new Date(today); d.setDate(d.getDate() - 30);
+    let iso = d.toISOString().slice(0, 10);
+    if (earliest && iso < earliest) iso = dates[Math.floor(dates.length / 2)];
+    runTimeMachine(symbol, iso);
+  }
+}
+
+async function runTimeMachine(symbol, asOf) {
+  const slot = document.getElementById('tm-result');
+  if (!slot || !asOf) return;
+  slot.innerHTML = `<div class="ai-loading"><span class="loading-spinner" style="width:12px;height:12px;border-width:1px"></span> Reconstructing ${symbol} as of ${asOf}…</div>`;
+  try {
+    const tm = await api.get(`/api/timemachine/${encodeURIComponent(symbol)}?as_of=${asOf}`);
+    renderTimeMachine(symbol, tm);
+  } catch (e) { slot.innerHTML = `<div class="no-profile-msg">Could not reconstruct that date.</div>`; }
+}
+
+function renderTimeMachine(symbol, tm) {
+  const slot = document.getElementById('tm-result');
+  const a = tm.analysis;
+  const avail = tm.availability || {};
+  const disc = tm.price_disclosure || {};
+  if (!a) {
+    slot.innerHTML = `<div class="tm-asof-band">AS OF ${esc(tm.as_of)} — ${esc((avail.reason) || 'not enough data to reconstruct')}</div>`;
+    return;
+  }
+  const sig = a.signal, sigCls = sig === 'BUY' ? 'sug-buy' : sig === 'SELL' ? 'sug-sell' : 'sug-hold';
+  const reg = a.regime || {};
+  // Indicator rows from the signals[] panel
+  const indicators = (a.signals || []).map(s =>
+    `<div class="tm-ind"><span class="tm-ind-name">${esc(s.name)}</span><span class="reason-icon ${s.direction === 'bull' ? 'reason-bull' : s.direction === 'bear' ? 'reason-bear' : 'reason-neutral'}"></span><span class="tm-ind-reason">${esc(s.reason)}</span></div>`).join('');
+  const unavail = (avail.unavailable || []).map(u => `<li>${esc(u.signal)} — ${esc(u.reason)}</li>`).join('');
+  const stop = a.suggested_stop;
+
+  // Outcome
+  const o = tm.outcome || {};
+  const hz = o.horizons || {};
+  const horizonRows = [1, 5, 10, 20].map(H => {
+    const h = hz[H] || hz[String(H)] || {};
+    if (!h.matured) return `<tr><td>${_H_LABEL[H]}</td><td class="muted" colspan="3">pending</td></tr>`;
+    return `<tr><td>${_H_LABEL[H]}</td><td class="${h.cc >= 0 ? 'up' : 'down'}">${_fmtPct(h.cc)}</td><td class="${h.no >= 0 ? 'up' : 'down'}">${_fmtPct(h.no)} <span class="muted">no</span></td><td class="muted">${h.spy_cc != null ? 'SPY ' + _fmtPct(h.spy_cc) : ''}</td></tr>`;
+  }).join('');
+
+  const discNote = disc.corporate_action
+    ? `<div class="tm-disclosure">${esc(disc.note)} Split-adjusted $${disc.adjusted != null ? disc.adjusted.toFixed(2) : '—'} · as-traded $${disc.as_traded != null ? disc.as_traded.toFixed(2) : '—'}.</div>`
+    : `<div class="muted" style="font-size:10px">Price shown is split-adjusted ($${disc.adjusted != null ? disc.adjusted.toFixed(2) : '—'}).</div>`;
+
+  const ctx = (tm.context || []).map(c =>
+    `<span class="tm-ctx-chip" onclick="runTimeMachine('${symbol}','${c.as_of}')">${c.as_of}: ${c.signal} → ${c.ret_20d != null ? _fmtPct(c.ret_20d) : 'pending'}</span>`).join('');
+
+  const aiBtn = S.aiEnabled
+    ? `<button class="btn-sm" onclick="runTimeMachineExplain('${symbol}','${tm.as_of}',false)">✦ Explain what the signal saw</button><div id="tm-explain"></div>`
+    : '';
+
+  slot.innerHTML = `
+    <div class="tm-asof-band">AS OF ${esc(tm.as_of)} — reconstructed from data available then</div>
+    <div class="tm-grid">
+      <div class="tm-card">
+        <div class="tm-card-head">
+          <span class="suggestion-badge ${sigCls}">${sigGlyph(sig)} ${sig}</span>
+          <span class="sd-conf">${a.confidence}%</span>
+          <span class="regime-badge ${reg.volatile ? 'regime-volatile' : ''}">${esc(reg.label || '—')}</span>
+        </div>
+        <div class="muted" style="font-size:10px;margin:2px 0 8px">ADX ${reg.adx ?? '—'} · ATR% ${reg.atr_pct ?? '—'} · score ${a.weighted_score != null ? (a.weighted_score >= 0 ? '+' : '') + a.weighted_score.toFixed(3) : '—'}</div>
+        ${indicators}
+        ${stop ? `<div class="tm-stop">Suggested stop $${stop.price != null ? stop.price.toFixed(2) : '—'} <span class="muted">(${esc(stop.basis || '')})</span></div>` : ''}
+        ${unavail ? `<div class="tm-unavail"><strong>Couldn't be computed then:</strong><ul>${unavail}</ul></div>` : ''}
+        ${discNote}
+      </div>
+      <div class="tm-outcome">
+        <div class="sd-section-title">What happened next</div>
+        <div class="tm-verdict ${o.borne_out === true ? 'up' : o.borne_out === false ? 'down' : ''}">${esc(o.verdict || '')}</div>
+        <table class="sb-mini"><thead><tr><th>Horizon</th><th>Close-close</th><th>Next-open</th><th></th></tr></thead><tbody>${horizonRows}</tbody></table>
+        <div class="muted" style="font-size:10px;margin-top:4px">To today: ${o.to_today ? _fmtPct(o.to_today.cc) : '—'} over ${o.to_today ? o.to_today.days : '—'} trading days.</div>
+        ${ctx ? `<div class="tm-ctx"><span class="muted" style="font-size:10px">Other dates (anti-cherry-pick):</span><br>${ctx}</div>` : ''}
+        ${aiBtn}
+      </div>
+    </div>
+    <div class="sd-disclaimer">${esc(tm.disclaimer || '')}</div>`;
+}
+
+async function runTimeMachineExplain(symbol, asOf, force) {
+  const slot = document.getElementById('tm-explain');
+  if (!slot) return;
+  slot.innerHTML = `<div class="ai-loading"><span class="loading-spinner" style="width:12px;height:12px;border-width:1px"></span> Asking Claude…</div>`;
+  try {
+    const r = await api.get(`/api/ai/timemachine-explain/${encodeURIComponent(symbol)}?as_of=${asOf}${force ? '&force=1' : ''}`);
+    if (!r.enabled || !r.explanation) { slot.innerHTML = ''; return; }
+    slot.innerHTML = `<div class="ai-block"><p>${aiText(r.explanation)}</p></div>${aiAttribution(`runTimeMachineExplain('${symbol}','${asOf}',true)`)}`;
+  } catch (e) { slot.innerHTML = `<p class="muted">Could not reach the AI service.</p>`; }
 }
 
 // ════════════════════════════════════════════════════════════════

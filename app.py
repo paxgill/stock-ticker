@@ -15,14 +15,17 @@ import yfinance as yf
 import pandas as pd
 
 from models import (db, WatchlistItem, AnalysisProfile, PortfolioPosition, TradeLog,
-                    Preference, FMPCache, QuoteCache, AlertEvent)
+                    Preference, FMPCache, QuoteCache, AlertEvent,
+                    SignalSnapshot, PricesDaily)
 from analysis import (
     analyze_ticker, compute_rsi, compute_rvol, rvol_tier,
-    smooth_prices, detect_surge_crash, detect_regime,
+    smooth_prices, detect_surge_crash, detect_regime, replay_signals,
     PRESETS, preset_to_profile, DISCLAIMER, DEFAULT_PROFILE,
 )
 from backtest import run_backtest
 from portfolio import fifo_preview, build_open_lots, blended_cost
+import snapshots as snap
+import scoreboard as sb
 import ai
 from narratives import fetch_index_data, generate_market_summary, generate_trade_description, generate_options_plan
 
@@ -2171,6 +2174,185 @@ def backtest():
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Signal Scoreboard + Time Machine (Phase 6) ───────────────────────────────
+def _fetch_history_both(symbol: str, period: str = "2y"):
+    """
+    Adjusted OHLCV (for all math) with a 'CloseRaw' column (as-traded close for
+    display). yfinance auto_adjust=False gives raw OHLC + 'Adj Close'; we scale
+    OHLC by Adj/Close so ratios stay continuous across splits/dividends.
+    """
+    try:
+        t = yf.Ticker(symbol.upper())
+        df = t.history(period=period, auto_adjust=False)
+        if df is None or df.empty or "Adj Close" not in df.columns:
+            return None
+        df = df.dropna(subset=["Close", "Adj Close"])
+        factor = df["Adj Close"] / df["Close"]
+        out = pd.DataFrame({
+            "Open": df["Open"] * factor, "High": df["High"] * factor,
+            "Low": df["Low"] * factor, "Close": df["Adj Close"],
+            "Volume": df["Volume"], "CloseRaw": df["Close"],
+        }, index=df.index)
+        return out
+    except Exception:
+        return None
+
+
+def _spy_prices_list(period: str = "2y"):
+    """SPY adjusted price list for benchmark comparison (cached in prices_daily)."""
+    df = _fetch_history_both("SPY", period)
+    if df is None:
+        return snap.prices_list("SPY")
+    snap.upsert_prices("SPY", df)
+    return snap.prices_list("SPY")
+
+
+def _resolve_scoreboard_profile(profile_id=None, preset_key=None):
+    """Return (profile_dict, profile_id, preset_key) for a scoreboard request."""
+    if preset_key:
+        p = preset_to_profile(preset_key)
+        return (p, None, preset_key) if p else (None, None, None)
+    if profile_id:
+        row = AnalysisProfile.query.get(profile_id)
+        return (row.to_dict(), row.id, None) if row else (None, None, None)
+    active = AnalysisProfile.query.filter_by(is_active=True).first()
+    if active:
+        return active.to_dict(), active.id, None
+    return DEFAULT_PROFILE.copy(), None, None
+
+
+def capture_live_snapshots():
+    """One live snapshot per watchlist symbol under the active profile (daemon job)."""
+    profile, pid, pkey_preset = _resolve_scoreboard_profile()
+    if not profile:
+        return 0
+    pkey = snap.profile_key(pid, pkey_preset)
+    today = date.today()
+    written = 0
+    for w in WatchlistItem.query.all():
+        df = _fetch_history_both(w.symbol, "1y")
+        if df is None:
+            continue
+        snap.upsert_prices(w.symbol, df)
+        recs = replay_signals(w.symbol, df, profile, as_of=today)
+        if not recs or recs[0]["analysis"] is None:
+            continue
+        r = recs[0]
+        sd = date.fromisoformat(r["snapshot_date"])
+        existing = SignalSnapshot.query.filter_by(symbol=w.symbol, snapshot_date=sd, profile_key=pkey).first()
+        if existing:
+            continue
+        db.session.add(SignalSnapshot(
+            symbol=w.symbol, snapshot_date=sd, signal=r["signal"], confidence=r["confidence"],
+            signed_score=r["signed_score"], regime=r["regime"], price_close_adj=r["price_close_adj"],
+            price_close_raw=r["price_close_raw"], price_next_open_adj=r["price_next_open_adj"],
+            had_ma200=r["had_ma200"], profile_id=pid, preset_key=pkey_preset, profile_key=pkey,
+            source="live", matured_through=0))
+        written += 1
+    db.session.commit()
+    for w in WatchlistItem.query.all():
+        snap.mature_symbol(w.symbol)
+    return written
+
+
+@app.route("/api/scoreboard/backfill", methods=["POST"])
+def scoreboard_backfill():
+    d = request.json or {}
+    lookback = max(30, min(365, int(d.get("lookback_days", 180))))
+    profile, pid, pkey_preset = _resolve_scoreboard_profile(d.get("profile_id"), d.get("preset_key"))
+    if not profile:
+        return jsonify({"error": "No profile available."}), 400
+    symbols = [s.upper() for s in d.get("symbols", [])] or [w.symbol for w in WatchlistItem.query.all()]
+    if not symbols:
+        return jsonify({"error": "No symbols to backfill."}), 400
+
+    fetch_period = "2y" if lookback > 300 else "1y"
+    results, total_created = [], 0
+    for symbol in symbols:
+        df = _fetch_history_both(symbol, fetch_period)
+        if df is None or len(df) < 60:
+            results.append({"symbol": symbol, "snapshots": 0, "error": "no history"})
+            continue
+        try:
+            created = snap.backfill_symbol(symbol, df, profile, pid, pkey_preset, lookback)
+            total_created += created
+            results.append({"symbol": symbol, "snapshots": created})
+        except Exception as e:
+            db.session.rollback()
+            results.append({"symbol": symbol, "error": str(e)})
+    return jsonify({"created": total_created, "symbols": results,
+                    "lookback_days": lookback,
+                    "profile_key": snap.profile_key(pid, pkey_preset)})
+
+
+@app.route("/api/scoreboard")
+def scoreboard():
+    horizon = int(request.args.get("horizon", 20))
+    if horizon not in sb.HORIZONS:
+        horizon = 20
+    source = request.args.get("source", "all")
+    use_bench = request.args.get("benchmark", "spy") == "spy"
+    profile, pid, pkey_preset = _resolve_scoreboard_profile(
+        request.args.get("profile_id"), request.args.get("preset_key"))
+    pkey = snap.profile_key(pid, pkey_preset)
+
+    symbols = sorted({s.symbol for s in SignalSnapshot.query.filter_by(profile_key=pkey).all()})
+    if not symbols:
+        return jsonify({"empty": True, "per_ticker": [], "cross_sectional_ic": {},
+                        "disclaimer": DISCLAIMER})
+
+    benchmark_rets = None
+    if use_bench:
+        spy = _spy_prices_list("2y")
+        d2i = {p["date"]: i for i, p in enumerate(spy)}
+        benchmark_rets = {}
+        for p in spy:
+            i = d2i[p["date"]]
+            benchmark_rets[p["date"]] = {H: (round(spy[i + H]["close"] / p["close"] - 1, 6)
+                                             if i + H < len(spy) and p["close"] else None)
+                                         for H in sb.HORIZONS}
+
+    data = snap.build_scoreboard(symbols, pkey, horizon, benchmark_rets, source)
+    data["empty"] = False
+    data["benchmark"] = "spy" if use_bench else "none"
+    data["survivorship_note"] = ("This is your self-curated watchlist — names you chose and "
+                                 "kept — an inherently flattering sample.")
+    return jsonify(data)
+
+
+@app.route("/api/scoreboard/<symbol>")
+def scoreboard_symbol(symbol):
+    sym = symbol.upper()
+    snap.mature_symbol(sym)
+    rows = SignalSnapshot.query.filter_by(symbol=sym).order_by(SignalSnapshot.snapshot_date).all()
+    return jsonify({"symbol": sym, "timeline": [r.to_dict() for r in rows],
+                    "disclaimer": DISCLAIMER})
+
+
+@app.route("/api/timemachine/<symbol>")
+def timemachine(symbol):
+    sym = symbol.upper()
+    as_of = request.args.get("as_of")
+    if not as_of:
+        return jsonify({"error": "as_of date required (YYYY-MM-DD)"}), 400
+    try:
+        as_of_d = date.fromisoformat(as_of[:10])
+    except ValueError:
+        return jsonify({"error": "invalid as_of date"}), 400
+    profile, pid, pkey_preset = _resolve_scoreboard_profile(
+        request.args.get("profile_id"), request.args.get("preset_key"))
+
+    df = _fetch_history_both(sym, "2y")
+    if df is None or df.empty:
+        return jsonify({"error": f"Unknown or unavailable symbol {sym}"}), 404
+    spy = _spy_prices_list("2y")
+    result = snap.build_timemachine(sym, df, profile, as_of_d, spy_prices=spy)
+    # Earliest fully-supported date (need ~200 prior bars for the full panel)
+    if len(df) > 200:
+        result["earliest_full_date"] = str(df.index[200].date() if hasattr(df.index[200], "date") else df.index[200])
+    return jsonify(result)
+
+
 # ─── Server-side alert engine + webhook (Phase 4) ─────────────────────────────
 def _current_price(symbol: str):
     """Latest price from the quote cache, else a single fetch. None on failure."""
@@ -2242,6 +2424,27 @@ def check_alerts_once() -> int:
 _alert_thread_started = False
 
 
+def _maybe_capture_daily_snapshot():
+    """After the close on a weekday, write one live snapshot per symbol (once/day)."""
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now_et = datetime.utcnow() - timedelta(hours=4)   # rough ET fallback
+    if now_et.weekday() >= 5 or (now_et.hour, now_et.minute) < (16, 5):
+        return
+    today = now_et.date()
+    already = SignalSnapshot.query.filter_by(snapshot_date=today, source="live").first()
+    if already:
+        return
+    try:
+        written = capture_live_snapshots()
+        if written:
+            app.logger.info("captured %d live snapshots for %s", written, today)
+    except Exception as e:
+        app.logger.warning("daily snapshot error: %s", e)
+
+
 def _alert_loop():
     while True:
         try:
@@ -2252,6 +2455,7 @@ def _alert_loop():
         try:
             with app.app_context():
                 check_alerts_once()
+                _maybe_capture_daily_snapshot()
         except Exception as e:
             app.logger.warning("alert loop error: %s", e)
 
@@ -2443,6 +2647,45 @@ def ai_backtest_postmortem():
     if not stats:
         return jsonify({"enabled": True, "error": "No backtest stats provided."}), 400
     text = ai.backtest_postmortem(stats, trades, force=bool(d.get("force", False)))
+    return jsonify({"enabled": True, "explanation": text})
+
+
+@app.route("/api/ai/scoreboard-postmortem", methods=["POST"])
+def ai_scoreboard_postmortem():
+    """Explain the signal-accuracy scoreboard (aggregate stats posted by the client)."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    d = request.json or {}
+    stats = d.get("stats")
+    if not stats:
+        return jsonify({"enabled": True, "error": "No stats provided."}), 400
+    text = ai.scoreboard_postmortem(stats, force=bool(d.get("force", False)))
+    return jsonify({"enabled": True, "explanation": text})
+
+
+@app.route("/api/ai/timemachine-explain/<symbol>")
+def ai_timemachine_explain(symbol):
+    """Explain a single reconstructed signal + its outcome."""
+    if not ai.ai_enabled():
+        return jsonify({"enabled": False})
+    as_of = request.args.get("as_of")
+    if not as_of:
+        return jsonify({"enabled": True, "error": "as_of required"}), 400
+    try:
+        as_of_d = date.fromisoformat(as_of[:10])
+    except ValueError:
+        return jsonify({"enabled": True, "error": "invalid as_of"}), 400
+    profile, pid, pkey_preset = _resolve_scoreboard_profile(request.args.get("profile_id"))
+    df = _fetch_history_both(symbol.upper(), "2y")
+    if df is None:
+        return jsonify({"enabled": True, "explanation": None})
+    tm = snap.build_timemachine(symbol.upper(), df, profile, as_of_d, spy_prices=_spy_prices_list("2y"))
+    payload = {"analysis": {k: tm["analysis"].get(k) for k in
+                            ("signal", "confidence", "regime", "signals", "weighted_score", "suggested_stop")}
+               if tm.get("analysis") else None,
+               "outcome": tm.get("outcome"), "availability": tm.get("availability")}
+    text = ai.timemachine_explain(payload, symbol.upper(), as_of,
+                                  force=request.args.get("force") == "1")
     return jsonify({"enabled": True, "explanation": text})
 
 

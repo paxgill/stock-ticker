@@ -163,6 +163,70 @@ class QuoteCache(db.Model):
         return d
 
 
+class PricesDaily(db.Model):
+    """Adjusted + raw daily OHLC cache so forward-return reads never hit the network."""
+    __tablename__ = "prices_daily"
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(16), nullable=False, index=True)
+    d = db.Column(db.Date, nullable=False, index=True)
+    open_adj = db.Column(db.Float)
+    high_adj = db.Column(db.Float)
+    low_adj = db.Column(db.Float)
+    close_adj = db.Column(db.Float)
+    close_raw = db.Column(db.Float)
+    __table_args__ = (db.UniqueConstraint("symbol", "d", name="uix_prices_symbol_date"),)
+
+
+class SignalSnapshot(db.Model):
+    """A point-in-time signal record (backfilled or live-captured) for accuracy scoring."""
+    __tablename__ = "signal_snapshots"
+    id = db.Column(db.Integer, primary_key=True)
+    symbol = db.Column(db.String(16), nullable=False, index=True)
+    snapshot_date = db.Column(db.Date, nullable=False, index=True)
+    signal = db.Column(db.String(4))
+    confidence = db.Column(db.Float)
+    signed_score = db.Column(db.Float)
+    regime = db.Column(db.String(24))
+    price_close_adj = db.Column(db.Float)
+    price_close_raw = db.Column(db.Float)
+    price_next_open_adj = db.Column(db.Float)
+    had_ma200 = db.Column(db.Boolean, default=True)
+    profile_id = db.Column(db.Integer)
+    preset_key = db.Column(db.String(40))
+    profile_key = db.Column(db.String(48), nullable=False)   # coalesce(profile_id, preset_key, 'active')
+    source = db.Column(db.String(8))                          # 'backfill' | 'live'
+    ret_1d = db.Column(db.Float)
+    ret_5d = db.Column(db.Float)
+    ret_10d = db.Column(db.Float)
+    ret_20d = db.Column(db.Float)
+    ret_1d_no = db.Column(db.Float)
+    ret_5d_no = db.Column(db.Float)
+    ret_10d_no = db.Column(db.Float)
+    ret_20d_no = db.Column(db.Float)
+    matured_through = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("symbol", "snapshot_date", "profile_key", name="uix_snap_sym_date_profile"),
+        db.Index("ix_snap_symbol_date", "symbol", "snapshot_date"),
+        db.Index("ix_snap_date", "snapshot_date"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id, "symbol": self.symbol,
+            "snapshot_date": self.snapshot_date.isoformat() if self.snapshot_date else None,
+            "signal": self.signal, "confidence": self.confidence, "signed_score": self.signed_score,
+            "regime": self.regime, "price_close_adj": self.price_close_adj,
+            "price_close_raw": self.price_close_raw, "price_next_open_adj": self.price_next_open_adj,
+            "had_ma200": self.had_ma200, "source": self.source,
+            "ret_1d": self.ret_1d, "ret_5d": self.ret_5d, "ret_10d": self.ret_10d, "ret_20d": self.ret_20d,
+            "ret_1d_no": self.ret_1d_no, "ret_5d_no": self.ret_5d_no,
+            "ret_10d_no": self.ret_10d_no, "ret_20d_no": self.ret_20d_no,
+            "matured_through": self.matured_through,
+        }
+
+
 class AlertEvent(db.Model):
     """A recorded alert trigger (from the server-side alert engine or client)."""
     __tablename__ = "alert_events"

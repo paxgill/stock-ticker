@@ -242,6 +242,7 @@
       <button class="tab-btn" data-tab="portfolio" onclick="switchTab('portfolio',this)">PORTFOLIO</button>
       <button class="tab-btn" data-tab="journal" onclick="switchTab('journal',this)">JOURNAL</button>
       <button class="tab-btn" data-tab="backtest" onclick="switchTab('backtest',this)">BACKTEST</button>
+      <button class="tab-btn" data-tab="scoreboard" onclick="switchTab('scoreboard',this)">SCOREBOARD</button>
       <button class="tab-btn" data-tab="optsig" onclick="switchTab('optsig',this)">OPT SIGNALS</button>
     </nav>
     <div class="dash-right">
@@ -538,6 +539,13 @@
     </div>
     <div id="bt-result" class="bt-result">
       <div class="empty-state"><h3>No backtest yet</h3><p>Pick a symbol and profile, then run a walk-forward simulation (capped at 1 symbol × 3 years).</p></div>
+    </div>
+  </div>
+
+  <!-- SCOREBOARD TAB -->
+  <div id="tab-scoreboard" class="tab-content">
+    <div id="scoreboard-content">
+      <div class="loading-screen"><div class="loading-spinner"></div><div>Loading scoreboard…</div></div>
     </div>
   </div>
 
@@ -838,6 +846,17 @@
         <button class="btn-primary" onclick="saveTierNotes()">Save</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Scoreboard Detail Drawer + Time Machine -->
+<div id="sb-drawer" class="modal-overlay" onclick="closeModalOverlay(event,'sb-drawer')">
+  <div class="modal-box modal-box-chart">
+    <div class="modal-header">
+      <div class="modal-title" id="sb-drawer-title">Ticker</div>
+      <button class="modal-close" onclick="closeModal('sb-drawer')">✕</button>
+    </div>
+    <div class="settings-body" id="sb-drawer-body"></div>
   </div>
 </div>
 

@@ -228,6 +228,39 @@ def watchlist_query(query: str, candidates: list) -> dict | None:
     return {"matches": matches, "disclaimer": DISCLAIMER}
 
 
+# ─── Feature 6: Scoreboard postmortem (Phase 6) ───────────────────────────────
+def scoreboard_postmortem(stats: dict, force: bool = False) -> str | None:
+    system = (
+        "You interpret a signal-accuracy scoreboard for one trader's watchlist. Use "
+        "ONLY the numbers provided (cross-sectional rank IC by horizon, hit rates, "
+        "BUY/SELL/HOLD forward-return table, by-regime breakdown, sample sizes). Lead "
+        "with whether the signals show real predictive power or look like noise, citing "
+        "the IC and its n. Name the strongest and weakest regime or signal type. Close "
+        "with one caveat about sample size, survivorship, or overfitting. 4-6 sentences. "
+        "No outside claims, no predictions."
+    )
+    user = json.dumps(stats, separators=(",", ":"))
+    key = f"sbpm:{abs(hash(user)) % (10 ** 10)}"
+    text = call_fable(system, user, max_tokens=320, cache_key=key, ttl_hours=6,
+                      feature="scoreboard_postmortem", force=force)
+    return with_disclaimer(text) if text else None
+
+
+def timemachine_explain(payload: dict, symbol: str, as_of: str, force: bool = False) -> str | None:
+    system = (
+        "You explain a single reconstructed trading signal and its realized outcome. "
+        "Use ONLY the provided computation (the indicator panel, regime, confidence, "
+        "suggested stop) and the realized forward returns. No outside knowledge of the "
+        "company, no predictions. Explicitly note this is one example, not evidence of "
+        "whether the signal works. 3-4 sentences."
+    )
+    user = json.dumps(payload, separators=(",", ":"))
+    key = f"tmx:{symbol}:{as_of}"
+    text = call_fable(system, user, max_tokens=240, cache_key=key, ttl_hours=4,
+                      feature="timemachine_explain", force=force)
+    return with_disclaimer(text) if text else None
+
+
 # ─── Feature 5: Backtest postmortem ───────────────────────────────────────────
 def backtest_postmortem(stats: dict, trades: list, force: bool = False) -> str | None:
     system = (
